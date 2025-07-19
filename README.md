@@ -31,13 +31,13 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer = { path = "./solana-streamer", version = "0.1.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.0" }
 ```
 
 ## Usage Examples
 
 ```rust
-use solana_streamer::{
+use solana_streamer_sdk::{
     match_event,
     streaming::{
         event_parser::{
@@ -96,7 +96,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumCpmm,
         Protocol::RaydiumClmm,
     ];
-    
+
     println!("Listening for events, press Ctrl+C to stop...");
     shred_stream
         .shredstream_subscribe(protocols, None, callback)

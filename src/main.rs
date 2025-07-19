@@ -1,4 +1,4 @@
-use solana_streamer::{
+use solana_streamer_sdk::{
     match_event,
     streaming::{
         event_parser::{
