@@ -31,7 +31,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer = { path = "./solana-streamer", version = "0.1.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.0" }
 ```
 
 ## Usage Examples

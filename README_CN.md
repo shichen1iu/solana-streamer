@@ -31,7 +31,7 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer = { path = "./solana-streamer", version = "0.1.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.0" }
 ```
 
 ## 使用示例
