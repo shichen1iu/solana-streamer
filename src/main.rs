@@ -1,38 +1,114 @@
-use grpc_parsed::{common::{
-    logs_events::PumpfunEvent,
-}, grpc::YellowstoneGrpc};
+use solana_streamer::{
+    match_event,
+    streaming::{
+        event_parser::{
+            protocols::{
+                bonk::{BonkPoolCreateEvent, BonkTradeEvent},
+                pumpfun::{PumpFunCreateTokenEvent, PumpFunTradeEvent},
+                pumpswap::{
+                    PumpSwapBuyEvent, PumpSwapCreatePoolEvent, PumpSwapDepositEvent,
+                    PumpSwapSellEvent, PumpSwapWithdrawEvent,
+                },
+                raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event},
+                raydium_cpmm::RaydiumCpmmSwapEvent,
+            },
+            Protocol, UnifiedEvent,
+        },
+        ShredStreamGrpc, YellowstoneGrpc,
+    },
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    test_grpc().await?;
+    test_shreds().await?;
+    Ok(())
+}
+
+async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
+    println!("正在订阅 GRPC 事件...");
+
     let grpc = YellowstoneGrpc::new(
-        "https://solana-yellowstone-grpc.publicnode.com:443".to_string(), 
+        "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
         None,
     )?;
 
-    println!("Connected to the network");
+    let callback = create_event_callback();
+    let protocols = vec![
+        Protocol::PumpFun,
+        Protocol::PumpSwap,
+        Protocol::Bonk,
+        Protocol::RaydiumCpmm,
+        Protocol::RaydiumClmm,
+    ];
 
-    let callback = |event: PumpfunEvent| {
+    println!("开始监听事件，按 Ctrl+C 停止...");
+    grpc.subscribe_events(protocols, None, None, None, callback)
+        .await?;
 
-        match event {
-            PumpfunEvent::NewDevTrade(trade_info) => {
-                println!("Received new dev trade event: {:?}", trade_info);
+    Ok(())
+}
+
+async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
+    println!("正在订阅 ShredStream 事件...");
+
+    let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
+    let callback = create_event_callback();
+    let protocols = vec![
+        Protocol::PumpFun,
+        Protocol::PumpSwap,
+        Protocol::Bonk,
+        Protocol::RaydiumCpmm,
+        Protocol::RaydiumClmm,
+    ];
+
+    println!("开始监听事件，按 Ctrl+C 停止...");
+    shred_stream
+        .shredstream_subscribe(protocols, None, callback)
+        .await?;
+
+    Ok(())
+}
+
+fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
+    |event: Box<dyn UnifiedEvent>| {
+        match_event!(event, {
+            BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
+                println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
-            PumpfunEvent::NewToken(token_info) => {
-                println!("Received new token event: {:?}", token_info);
+            BonkTradeEvent => |e: BonkTradeEvent| {
+                println!("BonkTradeEvent: {:?}", e);
             },
-            PumpfunEvent::NewUserTrade(trade_info) => {
-                println!("Received new trade event: {:?}", trade_info);
+            PumpFunTradeEvent => |e: PumpFunTradeEvent| {
+                println!("PumpFunTradeEvent: {:?}", e);
             },
-            PumpfunEvent::NewBotTrade(trade_info) => {
-                println!("Received new bot trade event: {:?}", trade_info);
+            PumpFunCreateTokenEvent => |e: PumpFunCreateTokenEvent| {
+                println!("PumpFunCreateTokenEvent: {:?}", e);
             },
-            PumpfunEvent::Error(err) => {
-                println!("Received error: {}", err);
+            PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
+                println!("Buy event: {:?}", e);
+            },
+            PumpSwapSellEvent => |e: PumpSwapSellEvent| {
+                println!("Sell event: {:?}", e);
+            },
+            PumpSwapCreatePoolEvent => |e: PumpSwapCreatePoolEvent| {
+                println!("CreatePool event: {:?}", e);
+            },
+            PumpSwapDepositEvent => |e: PumpSwapDepositEvent| {
+                println!("Deposit event: {:?}", e);
+            },
+            PumpSwapWithdrawEvent => |e: PumpSwapWithdrawEvent| {
+                println!("Withdraw event: {:?}", e);
+            },
+            RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
+                println!("RaydiumCpmmSwapEvent: {:?}", e);
+            },
+            RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
+                println!("RaydiumClmmSwapEvent: {:?}", e);
+            },
+            RaydiumClmmSwapV2Event => |e: RaydiumClmmSwapV2Event| {
+                println!("RaydiumClmmSwapV2Event: {:?}", e);
             }
-        }
-    };
-
-    grpc.subscribe_pumpfun(callback, None).await?;
-
-    Ok(())  
+        });
+    }
 }
