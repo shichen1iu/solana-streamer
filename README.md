@@ -20,6 +20,8 @@ A lightweight Rust library for real-time event streaming from Solana DEX trading
 
 ## Installation
 
+### Direct Clone
+
 Clone this project to your project directory:
 
 ```bash
@@ -31,7 +33,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.1" }
+```
+
+### Use crates.io
+
+```toml
+# Add to your Cargo.toml
+solana-streamer-sdk = "0.1.1"
 ```
 
 ## Usage Examples

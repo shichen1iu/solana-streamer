@@ -20,6 +20,8 @@
 
 ## 安装
 
+### 直接克隆
+
 将项目克隆到您的项目目录：
 
 ```bash
@@ -31,7 +33,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.1" }
+```
+
+### 使用 crates.io
+
+```toml
+# 添加到您的 Cargo.toml
+solana-streamer-sdk = "0.1.1"
 ```
 
 ## 使用示例
