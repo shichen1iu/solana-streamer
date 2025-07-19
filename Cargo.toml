@@ -1,5 +1,5 @@
 [package]
-name = "solana-streamer"
+name = "solana-streamer-sdk"
 version = "0.1.0"
 edition = "2021"
 authors = ["William <byteblock6@gmail.com>", "sgxiang <sgxiang@gmail.com>", "wei <1415121722@qq.com>"]

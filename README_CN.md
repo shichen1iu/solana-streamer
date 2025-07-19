@@ -37,7 +37,7 @@ solana-streamer = { path = "./solana-streamer", version = "0.1.0" }
 ## 使用示例
 
 ```rust
-use solana_streamer::{
+use solana_streamer_sdk::{
     match_event,
     streaming::{
         event_parser::{
@@ -96,7 +96,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumCpmm,
         Protocol::RaydiumClmm,
     ];
-    
+
     println!("开始监听事件，按 Ctrl+C 停止...");
     shred_stream
         .shredstream_subscribe(protocols, None, callback)
