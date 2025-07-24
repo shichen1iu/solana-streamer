@@ -168,6 +168,7 @@ impl YellowstoneGrpc {
         bot_wallet: Option<Pubkey>,
         account_include: Option<Vec<String>>,
         account_exclude: Option<Vec<String>>,
+        account_required: Option<Vec<String>>,
         callback: F,
     ) -> AnyResult<()>
     where
@@ -182,10 +183,12 @@ impl YellowstoneGrpc {
             .collect::<Vec<String>>();
         let mut account_include = account_include.unwrap_or_default();
         let account_exclude = account_exclude.unwrap_or_default();
+        let account_required = account_required.unwrap_or_default();
+        
         account_include.extend(protocol_accounts.clone());
 
         let transactions =
-            self.get_subscribe_request_filter(account_include, account_exclude, vec![]);
+            self.get_subscribe_request_filter(account_include, account_exclude, account_required);
 
         // 订阅事件
         let (mut subscribe_tx, mut stream) = self.subscribe_with_request(transactions).await?;
