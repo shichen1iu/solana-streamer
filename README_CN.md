@@ -33,14 +33,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.2" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.3" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = "0.1.2"
+solana-streamer-sdk = "0.1.3"
 ```
 
 ## 使用示例
@@ -87,7 +87,7 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("开始监听事件，按 Ctrl+C 停止...");
-    grpc.subscribe_events(protocols, None, None, None, callback)
+    grpc.subscribe_events(protocols, None, None, None, None, None, callback)
         .await?;
 
     Ok(())
@@ -117,6 +117,9 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         match_event!(event, {
+            BlockMetaEvent => |e: BlockMetaEvent| {
+                println!("BlockMetaEvent: {:?}", e.slot);
+            },
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },

@@ -1,8 +1,11 @@
-use crate::{common::AnyResult, streaming::yellowstone_grpc::{TransactionPretty, YellowstoneGrpc}};
-use solana_program::pubkey;
-use solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction};
+use crate::{
+    common::AnyResult,
+    streaming::yellowstone_grpc::{TransactionPretty, YellowstoneGrpc},
+};
 use futures::{channel::mpsc, StreamExt};
 use log::error;
+use solana_program::pubkey;
+use solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction};
 use solana_transaction_status::EncodedTransactionWithStatusMeta;
 
 const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
@@ -36,7 +39,8 @@ impl YellowstoneGrpc {
         let account_exclude = account_exclude.unwrap_or_default();
         let transactions =
             self.get_subscribe_request_filter(account_include, account_exclude, addrs);
-        let (mut subscribe_tx, mut stream) = self.subscribe_with_request(transactions).await?;
+        let (mut subscribe_tx, mut stream) =
+            self.subscribe_with_request(transactions, None).await?;
         let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(CHANNEL_SIZE);
 
         let callback = Box::new(callback);
@@ -46,7 +50,7 @@ impl YellowstoneGrpc {
                 match message {
                     Ok(msg) => {
                         if let Err(e) =
-                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
+                            Self::handle_stream_message(msg, &mut tx, None, &mut subscribe_tx).await
                         {
                             error!("Error handling message: {:?}", e);
                             break;

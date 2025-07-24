@@ -13,9 +13,12 @@ use yellowstone_grpc_proto::geyser::{
     SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
     SubscribeUpdateTransaction,
 };
+use yellowstone_grpc_proto::geyser::{SubscribeRequestFilterBlocksMeta, SubscribeUpdateBlockMeta};
 
 use crate::common::AnyResult;
+use crate::streaming::event_parser::core::traits::SDKSystemEventParser;
 use crate::streaming::event_parser::{EventParserFactory, Protocol, UnifiedEvent};
+use maplit::hashmap;
 
 type TransactionsFilterMap = HashMap<String, SubscribeRequestFilterTransactions>;
 
@@ -96,13 +99,22 @@ impl YellowstoneGrpc {
     pub async fn subscribe_with_request(
         &self,
         transactions: TransactionsFilterMap,
+        commitment: Option<CommitmentLevel>,
     ) -> AnyResult<(
         impl Sink<SubscribeRequest, Error = mpsc::SendError>,
         impl Stream<Item = Result<SubscribeUpdate, Status>>,
     )> {
         let subscribe_request = SubscribeRequest {
             transactions,
-            commitment: Some(CommitmentLevel::Processed.into()),
+            blocks_meta: hashmap! {
+                "".to_owned() => SubscribeRequestFilterBlocksMeta {
+                }
+            },
+            commitment: if let Some(commitment) = commitment {
+                Some(commitment as i32)
+            } else {
+                Some(CommitmentLevel::Processed.into())
+            },
             ..Default::default()
         };
 
@@ -137,11 +149,17 @@ impl YellowstoneGrpc {
     pub async fn handle_stream_message(
         msg: SubscribeUpdate,
         tx: &mut mpsc::Sender<TransactionPretty>,
+        block: Option<&mut mpsc::Sender<SubscribeUpdateBlockMeta>>,
         subscribe_tx: &mut (impl Sink<SubscribeRequest, Error = mpsc::SendError> + Unpin),
     ) -> AnyResult<()> {
         match msg.update_oneof {
+            Some(UpdateOneof::BlockMeta(sut)) => {
+                if let Some(block) = block {
+                    block.try_send(sut)?;
+                }
+            }
             Some(UpdateOneof::Transaction(sut)) => {
-                let transaction_pretty = TransactionPretty::from(sut);
+                let transaction_pretty = TransactionPretty::from(sut.clone());
                 tx.try_send(transaction_pretty)?;
             }
             Some(UpdateOneof::Ping(_)) => {
@@ -169,6 +187,7 @@ impl YellowstoneGrpc {
         account_include: Option<Vec<String>>,
         account_exclude: Option<Vec<String>>,
         account_required: Option<Vec<String>>,
+        commitment: Option<CommitmentLevel>,
         callback: F,
     ) -> AnyResult<()>
     where
@@ -184,28 +203,36 @@ impl YellowstoneGrpc {
         let mut account_include = account_include.unwrap_or_default();
         let account_exclude = account_exclude.unwrap_or_default();
         let account_required = account_required.unwrap_or_default();
-        
+
         account_include.extend(protocol_accounts.clone());
 
         let transactions =
             self.get_subscribe_request_filter(account_include, account_exclude, account_required);
 
         // 订阅事件
-        let (mut subscribe_tx, mut stream) = self.subscribe_with_request(transactions).await?;
+        let (mut subscribe_tx, mut stream) = self
+            .subscribe_with_request(transactions, commitment)
+            .await?;
 
         // 创建通道
         let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(CHANNEL_SIZE);
+        let (mut block, mut rblock) = mpsc::channel::<SubscribeUpdateBlockMeta>(CHANNEL_SIZE);
 
-        // 创建回调函数
-        let callback = Box::new(callback);
+        // 创建回调函数，使用 Arc 包装以便在多个任务中共享
+        let callback = std::sync::Arc::new(Box::new(callback));
 
         // 启动处理流的任务
         tokio::spawn(async move {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
-                        if let Err(e) =
-                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
+                        if let Err(e) = Self::handle_stream_message(
+                            msg,
+                            &mut tx,
+                            Some(&mut block),
+                            &mut subscribe_tx,
+                        )
+                        .await
                         {
                             error!("Error handling message: {:?}", e);
                             break;
@@ -219,20 +246,34 @@ impl YellowstoneGrpc {
             }
         });
 
-        // 处理交易
-        while let Some(transaction_pretty) = rx.next().await {
-            if let Err(e) = Self::process_event_transaction(
-                transaction_pretty,
-                &*callback,
-                bot_wallet,
-                protocols.clone(),
-            )
-            .await
-            {
-                error!("Error processing transaction: {:?}", e);
-            }
-        }
+        // 为交易处理和区块处理克隆 Arc<Box<F>>
+        let callback_tx = callback.clone();
+        let callback_block = callback;
 
+        // 处理交易
+        tokio::spawn(async move {
+            while let Some(transaction_pretty) = rx.next().await {
+                if let Err(e) = Self::process_event_transaction(
+                    transaction_pretty,
+                    &**callback_tx,
+                    bot_wallet,
+                    protocols.clone(),
+                )
+                .await
+                {
+                    error!("Error processing transaction: {:?}", e);
+                }
+            }
+        });
+        // 处理block
+        tokio::spawn(async move {
+            while let Some(block) = rblock.next().await {
+                if let Err(e) = Self::process_block(block, &**callback_block).await {
+                    error!("Error processing block: {:?}", e);
+                }
+            }
+        });
+        tokio::signal::ctrl_c().await?;
         Ok(())
     }
 
@@ -264,6 +305,16 @@ impl YellowstoneGrpc {
             }
         }
 
+        Ok(())
+    }
+
+    /// 处理区块
+    async fn process_block<F>(block: SubscribeUpdateBlockMeta, callback: &F) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
+    {
+        let event = SDKSystemEventParser::parse_block(block);
+        callback(event);
         Ok(())
     }
 }

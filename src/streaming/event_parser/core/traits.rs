@@ -1,4 +1,6 @@
 use anyhow::Result;
+use borsh::BorshDeserialize;
+use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::CompiledInstruction, pubkey::Pubkey, transaction::VersionedTransaction,
 };
@@ -7,7 +9,9 @@ use solana_transaction_status::{
 };
 use std::fmt::Debug;
 use std::{collections::HashMap, str::FromStr};
+use yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta;
 
+use crate::impl_unified_event;
 use crate::streaming::event_parser::common::{
     parse_transfer_datas_from_next_instructions, TransferData,
 };
@@ -52,6 +56,18 @@ pub trait UnifiedEvent: Debug + Send + Sync {
 
     fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>);
 }
+
+/// block meta 事件
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub struct BlockMetaEvent {
+    pub metadata: EventMetadata,
+    pub slot: u64,
+    pub blockhash: String,
+    pub block_time: i64,
+}
+
+// 使用宏生成UnifiedEvent实现，指定需要合并的字段
+impl_unified_event!(BlockMetaEvent,);
 
 /// 事件解析器trait - 定义了事件解析的核心方法
 #[async_trait::async_trait]
@@ -532,5 +548,28 @@ impl EventParser for GenericEventParser {
 
     fn supported_program_ids(&self) -> Vec<Pubkey> {
         vec![self.program_id]
+    }
+}
+
+pub struct SDKSystemEventParser {}
+impl SDKSystemEventParser {
+    pub fn parse_block(block: SubscribeUpdateBlockMeta) -> Box<dyn UnifiedEvent> {
+        Box::new(BlockMetaEvent {
+            metadata: EventMetadata::new(
+                block.blockhash.to_string(),
+                "".to_string(),
+                block.slot,
+                ProtocolType::SDKSystem,
+                EventType::SDKSystem,
+                Pubkey::default(),
+            ),
+            slot: block.slot,
+            blockhash: block.blockhash.to_string(),
+            block_time: if let Some(block_time) = block.block_time {
+                block_time.timestamp
+            } else {
+                0
+            },
+        })
     }
 }

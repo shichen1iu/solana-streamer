@@ -18,6 +18,7 @@ pub enum ProtocolType {
     Bonk,
     RaydiumCpmm,
     RaydiumClmm,
+    SDKSystem,
 }
 
 /// 事件类型枚举
@@ -54,6 +55,7 @@ pub enum EventType {
     RaydiumClmmSwapV2,
 
     // 通用事件
+    SDKSystem,
     Unknown,
 }
 
@@ -77,6 +79,7 @@ impl EventType {
             EventType::RaydiumCpmmSwapBaseOutput => "RaydiumCpmmSwapBaseOutput".to_string(),
             EventType::RaydiumClmmSwap => "RaydiumClmmSwap".to_string(),
             EventType::RaydiumClmmSwapV2 => "RaydiumClmmSwapV2".to_string(),
+            EventType::SDKSystem => "SDKSystem".to_string(),
             EventType::Unknown => "Unknown".to_string(),
         }
     }
