@@ -33,14 +33,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.3" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.4" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = "0.1.3"
+solana-streamer-sdk = "0.1.4"
 ```
 
 ## Usage Examples
@@ -118,6 +118,8 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         match_event!(event, {
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
+                // When using grpc, you can get block_time from each event
+                println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
             BonkTradeEvent => |e: BonkTradeEvent| {

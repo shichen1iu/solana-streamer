@@ -1,19 +1,14 @@
 use anyhow::Result;
-use borsh::BorshDeserialize;
 use prost_types::Timestamp;
-use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::CompiledInstruction, pubkey::Pubkey, transaction::VersionedTransaction,
 };
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, UiCompiledInstruction, UiInnerInstructions, UiInstruction,
 };
-use yellowstone_grpc_proto::prelude::UnixTimestamp;
 use std::fmt::Debug;
 use std::{collections::HashMap, str::FromStr};
-use yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta;
 
-use crate::impl_unified_event;
 use crate::streaming::event_parser::common::{
     parse_transfer_datas_from_next_instructions, TransferData,
 };
@@ -58,18 +53,6 @@ pub trait UnifiedEvent: Debug + Send + Sync {
 
     fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>);
 }
-
-/// block meta 事件
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
-pub struct BlockMetaEvent {
-    pub metadata: EventMetadata,
-    pub slot: u64,
-    pub blockhash: String,
-    pub block_time: i64,
-}
-
-// 使用宏生成UnifiedEvent实现，指定需要合并的字段
-impl_unified_event!(BlockMetaEvent,);
 
 /// 事件解析器trait - 定义了事件解析的核心方法
 #[async_trait::async_trait]
@@ -348,7 +331,8 @@ pub trait EventParser: Send + Sync {
         block_time: Option<Timestamp>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
-        let events = self.parse_events_from_inner_instruction(instruction, signature, slot, block_time);
+        let events =
+            self.parse_events_from_inner_instruction(instruction, signature, slot, block_time);
         Ok(events)
     }
 
@@ -361,7 +345,8 @@ pub trait EventParser: Send + Sync {
         block_time: Option<Timestamp>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
-        let events = self.parse_events_from_instruction(instruction, accounts, signature, slot, block_time);
+        let events =
+            self.parse_events_from_instruction(instruction, accounts, signature, slot, block_time);
         Ok(events)
     }
 
@@ -443,7 +428,10 @@ impl GenericEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
     ) -> Option<Box<dyn UnifiedEvent>> {
-        let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
+        let timestamp = block_time.unwrap_or(Timestamp {
+            seconds: 0,
+            nanos: 0,
+        });
         let block_time_ms = timestamp.seconds * 1000 + (timestamp.nanos as i64) / 1_000_000;
         let metadata = EventMetadata::new(
             signature.to_string(),
@@ -468,7 +456,10 @@ impl GenericEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
     ) -> Option<Box<dyn UnifiedEvent>> {
-        let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
+        let timestamp = block_time.unwrap_or(Timestamp {
+            seconds: 0,
+            nanos: 0,
+        });
         let block_time_ms = timestamp.seconds * 1000 + (timestamp.nanos as i64) / 1_000_000;
         let metadata = EventMetadata::new(
             signature.to_string(),
@@ -507,8 +498,8 @@ impl EventParser for GenericEventParser {
         for (disc, configs) in &self.inner_instruction_configs {
             if discriminator_matches(&inner_instruction_data_decoded_str, disc) {
                 for config in configs {
-                    if let Some(event) =
-                        self.parse_inner_instruction_event(config, data, signature, slot, block_time)
+                    if let Some(event) = self
+                        .parse_inner_instruction_event(config, data, signature, slot, block_time)
                     {
                         events.push(event);
                     }
@@ -577,27 +568,4 @@ impl EventParser for GenericEventParser {
 }
 
 pub struct SDKSystemEventParser {}
-impl SDKSystemEventParser {
-    pub fn parse_block(block: SubscribeUpdateBlockMeta) -> Box<dyn UnifiedEvent> {
-        let block_time = block.block_time.unwrap_or(UnixTimestamp { timestamp: 0 });
-        Box::new(BlockMetaEvent {
-            metadata: EventMetadata::new(
-                block.blockhash.to_string(),
-                "".to_string(),
-                block.slot,
-                block_time.timestamp,
-                block_time.timestamp * 1000,
-                ProtocolType::SDKSystem,
-                EventType::SDKSystem,
-                Pubkey::default(),
-            ),
-            slot: block.slot,
-            blockhash: block.blockhash.to_string(),
-            block_time: if let Some(block_time) = block.block_time {
-                block_time.timestamp
-            } else {
-                0
-            },
-        })
-    }
-}
+impl SDKSystemEventParser {}

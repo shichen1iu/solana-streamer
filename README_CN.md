@@ -33,14 +33,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.3" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.4" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = "0.1.3"
+solana-streamer-sdk = "0.1.4"
 ```
 
 ## 使用示例
@@ -118,6 +118,8 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         match_event!(event, {
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
+                // 使用grpc的时候，可以从每个事件中获取到block_time
+                println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
