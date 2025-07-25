@@ -14,12 +14,9 @@ use yellowstone_grpc_proto::geyser::{
     SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
     SubscribeUpdateTransaction,
 };
-use yellowstone_grpc_proto::geyser::{SubscribeRequestFilterBlocksMeta, SubscribeUpdateBlockMeta};
 
 use crate::common::AnyResult;
-use crate::streaming::event_parser::core::traits::SDKSystemEventParser;
 use crate::streaming::event_parser::{EventParserFactory, Protocol, UnifiedEvent};
-use maplit::hashmap;
 
 type TransactionsFilterMap = HashMap<String, SubscribeRequestFilterTransactions>;
 
@@ -57,7 +54,12 @@ impl fmt::Debug for TransactionPretty {
 }
 
 impl From<(SubscribeUpdateTransaction, Option<Timestamp>)> for TransactionPretty {
-    fn from((SubscribeUpdateTransaction { transaction, slot }, block_time): (SubscribeUpdateTransaction, Option<Timestamp>)) -> Self {
+    fn from(
+        (SubscribeUpdateTransaction { transaction, slot }, block_time): (
+            SubscribeUpdateTransaction,
+            Option<Timestamp>,
+        ),
+    ) -> Self {
         let tx = transaction.expect("should be defined");
         Self {
             slot,
@@ -109,10 +111,6 @@ impl YellowstoneGrpc {
     )> {
         let subscribe_request = SubscribeRequest {
             transactions,
-            blocks_meta: hashmap! {
-                "".to_owned() => SubscribeRequestFilterBlocksMeta {
-                }
-            },
             commitment: if let Some(commitment) = commitment {
                 Some(commitment as i32)
             } else {
@@ -223,12 +221,8 @@ impl YellowstoneGrpc {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
-                        if let Err(e) = Self::handle_stream_message(
-                            msg,
-                            &mut tx,
-                            &mut subscribe_tx,
-                        )
-                        .await
+                        if let Err(e) =
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
                         {
                             error!("Error handling message: {:?}", e);
                             break;
@@ -257,7 +251,7 @@ impl YellowstoneGrpc {
                 }
             }
         });
-        
+
         tokio::signal::ctrl_c().await?;
         Ok(())
     }
