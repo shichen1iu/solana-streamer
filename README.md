@@ -117,9 +117,6 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         match_event!(event, {
-            BlockMetaEvent => |e: BlockMetaEvent| {
-                println!("BlockMetaEvent: {:?}", e.slot);
-            },
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
