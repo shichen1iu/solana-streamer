@@ -1,13 +1,20 @@
 use anyhow::Result;
+use borsh::BorshDeserialize;
+use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::CompiledInstruction, pubkey::Pubkey, transaction::VersionedTransaction,
 };
 use solana_transaction_status::{
-    EncodedTransactionWithStatusMeta, UiCompiledInstruction, UiInstruction,
+    EncodedTransactionWithStatusMeta, UiCompiledInstruction, UiInnerInstructions, UiInstruction,
 };
 use std::fmt::Debug;
 use std::{collections::HashMap, str::FromStr};
+use yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta;
 
+use crate::impl_unified_event;
+use crate::streaming::event_parser::common::{
+    parse_transfer_datas_from_next_instructions, TransferData,
+};
 use crate::streaming::event_parser::{
     common::{utils::*, EventMetadata, EventType, ProtocolType},
     protocols::{
@@ -46,7 +53,21 @@ pub trait UnifiedEvent: Debug + Send + Sync {
     fn merge(&mut self, _other: Box<dyn UnifiedEvent>) {
         // 默认实现：不进行任何合并操作
     }
+
+    fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>);
 }
+
+/// block meta 事件
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub struct BlockMetaEvent {
+    pub metadata: EventMetadata,
+    pub slot: u64,
+    pub blockhash: String,
+    pub block_time: i64,
+}
+
+// 使用宏生成UnifiedEvent实现，指定需要合并的字段
+impl_unified_event!(BlockMetaEvent,);
 
 /// 事件解析器trait - 定义了事件解析的核心方法
 #[async_trait::async_trait]
@@ -75,6 +96,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         accounts: &[Pubkey],
+        inner_instructions: &[UiInnerInstructions],
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let mut instruction_events = Vec::new();
         // 获取交易的指令和账户
@@ -85,7 +107,7 @@ pub trait EventParser: Send + Sync {
         let has_program = accounts.iter().any(|account| self.should_handle(account));
         if has_program {
             // 解析每个指令
-            for instruction in compiled_instructions {
+            for (index, instruction) in compiled_instructions.iter().enumerate() {
                 if let Some(program_id) = accounts.get(instruction.program_id_index as usize) {
                     if self.should_handle(program_id) {
                         let max_idx = instruction.accounts.iter().max().unwrap_or(&0);
@@ -95,11 +117,29 @@ pub trait EventParser: Send + Sync {
                                 accounts.push(Pubkey::default());
                             }
                         }
-                        if let Ok(events) = self
+                        if let Ok(mut events) = self
                             .parse_instruction(instruction, &accounts, signature, slot)
                             .await
                         {
-                            instruction_events.extend(events);
+                            if events.len() > 0 {
+                                if let Some(inn) =
+                                    inner_instructions.iter().find(|inner_instruction| {
+                                        inner_instruction.index == index as u8
+                                    })
+                                {
+                                    events.iter_mut().for_each(|event| {
+                                        let transfer_datas =
+                                            parse_transfer_datas_from_next_instructions(
+                                                &inn,
+                                                -1 as i8,
+                                                &accounts,
+                                                event.event_type(),
+                                            );
+                                        event.set_transfer_datas(transfer_datas.clone());
+                                    });
+                                }
+                                instruction_events.extend(events);
+                            }
                         }
                     }
                 }
@@ -122,6 +162,7 @@ pub trait EventParser: Send + Sync {
                 signature,
                 slot,
                 &accounts,
+                &vec![],
             )
             .await
             .unwrap_or_else(|_e| vec![]);
@@ -143,7 +184,9 @@ pub trait EventParser: Send + Sync {
             .ok_or_else(|| anyhow::anyhow!("Missing transaction metadata"))?;
 
         let mut address_table_lookups: Vec<Pubkey> = vec![];
+        let mut inner_instructions: Vec<UiInnerInstructions> = vec![];
         if meta.err.is_none() {
+            inner_instructions = meta.inner_instructions.as_ref().unwrap().clone();
             let loaded_addresses = meta.loaded_addresses.as_ref().unwrap();
             for lookup in &loaded_addresses.writable {
                 address_table_lookups.push(Pubkey::from_str(lookup).unwrap());
@@ -167,6 +210,7 @@ pub trait EventParser: Send + Sync {
                     signature,
                     slot,
                     &accounts,
+                    &inner_instructions,
                 )
                 .await
                 .unwrap_or_else(|_e| vec![]);
@@ -178,9 +222,8 @@ pub trait EventParser: Send + Sync {
         let mut inner_instruction_events = Vec::new();
         // 检查交易是否成功
         if meta.err.is_none() {
-            let inner_instructions = meta.inner_instructions.as_ref().unwrap();
             for inner_instruction in inner_instructions {
-                for instruction in &inner_instruction.instructions {
+                for (index, instruction) in inner_instruction.instructions.iter().enumerate() {
                     match instruction {
                         UiInstruction::Compiled(compiled) => {
                             // 解析嵌套指令
@@ -189,7 +232,7 @@ pub trait EventParser: Send + Sync {
                                 accounts: compiled.accounts.clone(),
                                 data: bs58::decode(compiled.data.clone()).into_vec().unwrap(),
                             };
-                            if let Ok(events) = self
+                            if let Ok(mut events) = self
                                 .parse_instruction(
                                     &compiled_instruction,
                                     &accounts,
@@ -198,13 +241,37 @@ pub trait EventParser: Send + Sync {
                                 )
                                 .await
                             {
-                                instruction_events.extend(events);
+                                if events.len() > 0 {
+                                    events.iter_mut().for_each(|event| {
+                                        let transfer_datas =
+                                            parse_transfer_datas_from_next_instructions(
+                                                &inner_instruction,
+                                                index as i8,
+                                                &accounts,
+                                                event.event_type(),
+                                            );
+                                        event.set_transfer_datas(transfer_datas.clone());
+                                    });
+                                    instruction_events.extend(events);
+                                }
                             }
-                            if let Ok(events) = self
+                            if let Ok(mut events) = self
                                 .parse_inner_instruction(compiled, signature, slot)
                                 .await
                             {
-                                inner_instruction_events.extend(events);
+                                if events.len() > 0 {
+                                    events.iter_mut().for_each(|event| {
+                                        let transfer_datas =
+                                            parse_transfer_datas_from_next_instructions(
+                                                &inner_instruction,
+                                                index as i8,
+                                                &accounts,
+                                                event.event_type(),
+                                            );
+                                        event.set_transfer_datas(transfer_datas.clone());
+                                    });
+                                    inner_instruction_events.extend(events);
+                                }
                             }
                         }
                         _ => {}
@@ -481,5 +548,28 @@ impl EventParser for GenericEventParser {
 
     fn supported_program_ids(&self) -> Vec<Pubkey> {
         vec![self.program_id]
+    }
+}
+
+pub struct SDKSystemEventParser {}
+impl SDKSystemEventParser {
+    pub fn parse_block(block: SubscribeUpdateBlockMeta) -> Box<dyn UnifiedEvent> {
+        Box::new(BlockMetaEvent {
+            metadata: EventMetadata::new(
+                block.blockhash.to_string(),
+                "".to_string(),
+                block.slot,
+                ProtocolType::SDKSystem,
+                EventType::SDKSystem,
+                Pubkey::default(),
+            ),
+            slot: block.slot,
+            blockhash: block.blockhash.to_string(),
+            block_time: if let Some(block_time) = block.block_time {
+                block_time.timestamp
+            } else {
+                0
+            },
+        })
     }
 }

@@ -20,6 +20,8 @@ A lightweight Rust library for real-time event streaming from Solana DEX trading
 
 ## Installation
 
+### Direct Clone
+
 Clone this project to your project directory:
 
 ```bash
@@ -31,7 +33,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.3" }
+```
+
+### Use crates.io
+
+```toml
+# Add to your Cargo.toml
+solana-streamer-sdk = "0.1.3"
 ```
 
 ## Usage Examples
@@ -78,7 +87,7 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("Listening for events, press Ctrl+C to stop...");
-    grpc.subscribe_events(protocols, None, None, None, callback)
+    grpc.subscribe_events(protocols, None, None, None, None, None, callback)
         .await?;
 
     Ok(())
@@ -108,6 +117,9 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         match_event!(event, {
+            BlockMetaEvent => |e: BlockMetaEvent| {
+                println!("BlockMetaEvent: {:?}", e.slot);
+            },
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },

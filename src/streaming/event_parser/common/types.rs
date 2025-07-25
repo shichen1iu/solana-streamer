@@ -1,6 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
+use solana_sdk::instruction::CompiledInstruction;
 use solana_sdk::pubkey::Pubkey;
+use solana_transaction_status::{
+    UiCompiledInstruction, UiInstruction, UiTransactionStatusMeta, UiTransactionTokenBalance,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -14,6 +18,7 @@ pub enum ProtocolType {
     Bonk,
     RaydiumCpmm,
     RaydiumClmm,
+    SDKSystem,
 }
 
 /// 事件类型枚举
@@ -50,6 +55,7 @@ pub enum EventType {
     RaydiumClmmSwapV2,
 
     // 通用事件
+    SDKSystem,
     Unknown,
 }
 
@@ -73,6 +79,7 @@ impl EventType {
             EventType::RaydiumCpmmSwapBaseOutput => "RaydiumCpmmSwapBaseOutput".to_string(),
             EventType::RaydiumClmmSwap => "RaydiumClmmSwap".to_string(),
             EventType::RaydiumClmmSwapV2 => "RaydiumClmmSwapV2".to_string(),
+            EventType::SDKSystem => "SDKSystem".to_string(),
             EventType::Unknown => "Unknown".to_string(),
         }
     }
@@ -129,6 +136,20 @@ impl ProtocolInfo {
     }
 }
 
+/// 交易数据
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct TransferData {
+    pub token_program: Pubkey,
+    pub source: Pubkey,
+    pub destination: Pubkey,
+    pub authority: Option<Pubkey>,
+    pub amount: u64,
+    pub decimals: Option<u8>,
+    pub mint: Option<Pubkey>,
+}
+
 /// 事件元数据
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
@@ -141,6 +162,7 @@ pub struct EventMetadata {
     pub protocol: ProtocolType,
     pub event_type: EventType,
     pub program_id: Pubkey,
+    pub transfer_datas: Vec<TransferData>,
 }
 
 impl EventMetadata {
@@ -160,6 +182,7 @@ impl EventMetadata {
             protocol,
             event_type,
             program_id,
+            transfer_datas: vec![],
         }
     }
     pub fn set_id(&mut self, id: String) {
@@ -170,4 +193,124 @@ impl EventMetadata {
         let hash_value = hasher.finish();
         self.id = format!("{:x}", hash_value);
     }
+}
+
+/// 解析接下来指令中的token转账数据
+pub fn parse_transfer_datas_from_next_instructions(
+    inner_instruction: &solana_transaction_status::UiInnerInstructions,
+    current_index: i8,
+    accounts: &[Pubkey],
+    event_type: EventType,
+) -> Vec<TransferData> {
+    let take = match event_type {
+        EventType::PumpFunBuy => 4,
+        EventType::PumpFunSell => 1,
+        EventType::PumpSwapBuy => 3,
+        EventType::PumpSwapSell => 3,
+        EventType::BonkBuyExactIn
+        | EventType::BonkBuyExactOut
+        | EventType::BonkSellExactIn
+        | EventType::BonkSellExactOut => 3,
+        EventType::RaydiumCpmmSwapBaseInput
+        | EventType::RaydiumCpmmSwapBaseOutput
+        | EventType::RaydiumClmmSwap
+        | EventType::RaydiumClmmSwapV2 => 2,
+        _ => 0,
+    };
+    if take == 0 {
+        return vec![];
+    }
+    let mut transfer_datas = vec![];
+    // 获取当前指令之后的两个指令
+    let next_instructions: Vec<&UiInstruction> = inner_instruction
+        .instructions
+        .iter()
+        .skip((current_index + 1) as usize)
+        .take(take)
+        .collect();
+
+    for instruction in next_instructions {
+        if let UiInstruction::Compiled(compiled) = instruction {
+            if let Ok(data) = bs58::decode(compiled.data.clone()).into_vec() {
+                // Token Program: transferChecked
+                // Token 2022 Program: transferChecked
+                if data[0] == 12 {
+                    let account_pubkeys: Vec<Pubkey> = compiled
+                        .accounts
+                        .iter()
+                        .map(|a| accounts[*a as usize])
+                        .collect();
+                    if account_pubkeys.len() < 4 {
+                        continue;
+                    }
+                    let (source, mint, destination, authority) = (
+                        account_pubkeys[0],
+                        account_pubkeys[1],
+                        account_pubkeys[2],
+                        account_pubkeys[3],
+                    );
+                    let amount = u64::from_le_bytes(data[1..9].try_into().unwrap());
+                    let decimals = data[9];
+                    let token_program = accounts[compiled.program_id_index as usize];
+                    transfer_datas.push(TransferData {
+                        amount,
+                        decimals: Some(decimals),
+                        mint: Some(mint),
+                        source,
+                        destination,
+                        authority: Some(authority),
+                        token_program,
+                    });
+                }
+                // Token Program: transfer
+                else if data[0] == 3 {
+                    let account_pubkeys: Vec<Pubkey> = compiled
+                        .accounts
+                        .iter()
+                        .map(|a| accounts[*a as usize])
+                        .collect();
+                    if account_pubkeys.len() < 3 {
+                        continue;
+                    }
+                    let (source, destination, authority) =
+                        (account_pubkeys[0], account_pubkeys[1], account_pubkeys[2]);
+                    let amount = u64::from_le_bytes(data[1..9].try_into().unwrap());
+                    let token_program = accounts[compiled.program_id_index as usize];
+                    transfer_datas.push(TransferData {
+                        amount,
+                        decimals: None,
+                        mint: None,
+                        source,
+                        destination,
+                        authority: Some(authority),
+                        token_program,
+                    });
+                }
+                //System Program: transfer
+                else if data[0] == 2 {
+                    let account_pubkeys: Vec<Pubkey> = compiled
+                        .accounts
+                        .iter()
+                        .map(|a| accounts[*a as usize])
+                        .collect();
+                    if account_pubkeys.len() < 2 {
+                        continue;
+                    }
+                    let (source, destination) = (account_pubkeys[0], account_pubkeys[1]);
+                    let amount = u64::from_le_bytes(data[4..12].try_into().unwrap());
+                    let token_program = accounts[compiled.program_id_index as usize];
+                    transfer_datas.push(TransferData {
+                        amount,
+                        decimals: None,
+                        mint: None,
+                        source,
+                        destination,
+                        authority: None,
+                        token_program,
+                    });
+                }
+            }
+        }
+    }
+    transfer_datas
 }
