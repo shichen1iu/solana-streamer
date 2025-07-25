@@ -261,7 +261,6 @@ impl YellowstoneGrpc {
         Ok(())
     }
 
-    /// 处理事件交易
     async fn process_event_transaction<F>(
         transaction_pretty: TransactionPretty,
         callback: &F,
@@ -271,24 +270,39 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
     {
+        // let start_time = std::time::Instant::now();
         let slot = transaction_pretty.slot;
         let signature = transaction_pretty.signature.to_string();
+        let mut futures = Vec::new();
         for protocol in protocols {
             let parser = EventParserFactory::create_parser(protocol);
-            let events = parser
-                .parse_transaction(
-                    transaction_pretty.tx.clone(),
-                    &signature,
+            let tx_clone = transaction_pretty.tx.clone();
+            let signature_clone = signature.clone();
+            let bot_wallet_clone = bot_wallet.clone();
+            
+            futures.push(tokio::spawn(async move {
+                parser.parse_transaction(
+                    tx_clone,
+                    &signature_clone,
                     Some(slot),
                     transaction_pretty.block_time,
-                    bot_wallet.clone(),
+                    bot_wallet_clone,
                 )
                 .await
-                .unwrap_or_else(|_e| vec![]);
-            for event in events {
-                callback(event);
+                .unwrap_or_else(|_e| vec![])
+            }));
+        }
+
+        let results = futures::future::join_all(futures).await;
+        for result in results {
+            if let Ok(events) = result {
+                for event in events {
+                    callback(event);
+                }
             }
         }
+        // let elapsed = start_time.elapsed();
+        // println!("处理交易耗时: {:?}", elapsed);
 
         Ok(())
     }
