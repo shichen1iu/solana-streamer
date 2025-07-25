@@ -22,7 +22,7 @@ use solana_streamer_sdk::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     test_grpc().await?;
-    test_shreds().await?;
+    // test_shreds().await?;
     Ok(())
 }
 
@@ -36,11 +36,11 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
     let callback = create_event_callback();
     let protocols = vec![
-        Protocol::PumpFun,
-        Protocol::PumpSwap,
+        // Protocol::PumpFun,
+        // Protocol::PumpSwap,
         Protocol::Bonk,
-        Protocol::RaydiumCpmm,
-        Protocol::RaydiumClmm,
+        // Protocol::RaydiumCpmm,
+        // Protocol::RaydiumClmm,
     ];
 
     println!("开始监听事件，按 Ctrl+C 停止...");
@@ -75,10 +75,10 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         match_event!(event, {
             BlockMetaEvent => |e: BlockMetaEvent| {
-                println!("BlockMetaEvent: {:?}", e.slot);
+                // println!("BlockMetaEvent: {:?}", e.slot);
             },
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
-                println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
+                // println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
                 println!("BonkTradeEvent: {:?}", e);

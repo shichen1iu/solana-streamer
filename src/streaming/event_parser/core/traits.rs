@@ -1,5 +1,6 @@
 use anyhow::Result;
 use borsh::BorshDeserialize;
+use prost_types::Timestamp;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::CompiledInstruction, pubkey::Pubkey, transaction::VersionedTransaction,
@@ -7,6 +8,7 @@ use solana_sdk::{
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, UiCompiledInstruction, UiInnerInstructions, UiInstruction,
 };
+use yellowstone_grpc_proto::prelude::UnixTimestamp;
 use std::fmt::Debug;
 use std::{collections::HashMap, str::FromStr};
 use yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta;
@@ -78,6 +80,7 @@ pub trait EventParser: Send + Sync {
         instruction: &UiCompiledInstruction,
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从指令中解析事件数据
@@ -87,6 +90,7 @@ pub trait EventParser: Send + Sync {
         accounts: &[Pubkey],
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从VersionedTransaction中解析指令事件的通用方法
@@ -95,6 +99,7 @@ pub trait EventParser: Send + Sync {
         versioned_tx: &VersionedTransaction,
         signature: &str,
         slot: Option<u64>,
+        block_time: Option<Timestamp>,
         accounts: &[Pubkey],
         inner_instructions: &[UiInnerInstructions],
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
@@ -118,7 +123,7 @@ pub trait EventParser: Send + Sync {
                             }
                         }
                         if let Ok(mut events) = self
-                            .parse_instruction(instruction, &accounts, signature, slot)
+                            .parse_instruction(instruction, &accounts, signature, slot, block_time)
                             .await
                         {
                             if events.len() > 0 {
@@ -153,6 +158,7 @@ pub trait EventParser: Send + Sync {
         versioned_tx: &VersionedTransaction,
         signature: &str,
         slot: Option<u64>,
+        block_time: Option<Timestamp>,
         bot_wallet: Option<Pubkey>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let accounts: Vec<Pubkey> = versioned_tx.message.static_account_keys().to_vec();
@@ -161,6 +167,7 @@ pub trait EventParser: Send + Sync {
                 versioned_tx,
                 signature,
                 slot,
+                block_time,
                 &accounts,
                 &vec![],
             )
@@ -174,6 +181,7 @@ pub trait EventParser: Send + Sync {
         tx: EncodedTransactionWithStatusMeta,
         signature: &str,
         slot: Option<u64>,
+        block_time: Option<Timestamp>,
         bot_wallet: Option<Pubkey>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let transaction = tx.transaction;
@@ -209,6 +217,7 @@ pub trait EventParser: Send + Sync {
                     &versioned_tx,
                     signature,
                     slot,
+                    block_time,
                     &accounts,
                     &inner_instructions,
                 )
@@ -238,6 +247,7 @@ pub trait EventParser: Send + Sync {
                                     &accounts,
                                     signature,
                                     slot,
+                                    block_time,
                                 )
                                 .await
                             {
@@ -256,7 +266,7 @@ pub trait EventParser: Send + Sync {
                                 }
                             }
                             if let Ok(mut events) = self
-                                .parse_inner_instruction(compiled, signature, slot)
+                                .parse_inner_instruction(compiled, signature, slot, block_time)
                                 .await
                             {
                                 if events.len() > 0 {
@@ -335,9 +345,10 @@ pub trait EventParser: Send + Sync {
         instruction: &UiCompiledInstruction,
         signature: &str,
         slot: Option<u64>,
+        block_time: Option<Timestamp>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
-        let events = self.parse_events_from_inner_instruction(instruction, signature, slot);
+        let events = self.parse_events_from_inner_instruction(instruction, signature, slot, block_time);
         Ok(events)
     }
 
@@ -347,9 +358,10 @@ pub trait EventParser: Send + Sync {
         accounts: &[Pubkey],
         signature: &str,
         slot: Option<u64>,
+        block_time: Option<Timestamp>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
-        let events = self.parse_events_from_instruction(instruction, accounts, signature, slot);
+        let events = self.parse_events_from_instruction(instruction, accounts, signature, slot, block_time);
         Ok(events)
     }
 
@@ -429,11 +441,16 @@ impl GenericEventParser {
         data: &[u8],
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Option<Box<dyn UnifiedEvent>> {
+        let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
+        let block_time_ms = timestamp.seconds * 1000 + (timestamp.nanos as i64) / 1_000_000;
         let metadata = EventMetadata::new(
             signature.to_string(),
             signature.to_string(),
             slot,
+            timestamp.seconds,
+            block_time_ms,
             self.protocol_type.clone(),
             config.event_type.clone(),
             self.program_id,
@@ -449,11 +466,16 @@ impl GenericEventParser {
         account_pubkeys: &[Pubkey],
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Option<Box<dyn UnifiedEvent>> {
+        let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
+        let block_time_ms = timestamp.seconds * 1000 + (timestamp.nanos as i64) / 1_000_000;
         let metadata = EventMetadata::new(
             signature.to_string(),
             signature.to_string(),
             slot,
+            timestamp.seconds,
+            block_time_ms,
             self.protocol_type.clone(),
             config.event_type.clone(),
             self.program_id,
@@ -470,6 +492,7 @@ impl EventParser for GenericEventParser {
         inner_instruction: &UiCompiledInstruction,
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let inner_instruction_data = inner_instruction.data.clone();
         let inner_instruction_data_decoded =
@@ -485,7 +508,7 @@ impl EventParser for GenericEventParser {
             if discriminator_matches(&inner_instruction_data_decoded_str, disc) {
                 for config in configs {
                     if let Some(event) =
-                        self.parse_inner_instruction_event(config, data, signature, slot)
+                        self.parse_inner_instruction_event(config, data, signature, slot, block_time)
                     {
                         events.push(event);
                     }
@@ -502,6 +525,7 @@ impl EventParser for GenericEventParser {
         accounts: &[Pubkey],
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let program_id = accounts[instruction.program_id_index as usize];
         if !self.should_handle(&program_id) {
@@ -532,6 +556,7 @@ impl EventParser for GenericEventParser {
                         &account_pubkeys,
                         signature,
                         slot,
+                        block_time,
                     ) {
                         events.push(event);
                     }
@@ -554,11 +579,14 @@ impl EventParser for GenericEventParser {
 pub struct SDKSystemEventParser {}
 impl SDKSystemEventParser {
     pub fn parse_block(block: SubscribeUpdateBlockMeta) -> Box<dyn UnifiedEvent> {
+        let block_time = block.block_time.unwrap_or(UnixTimestamp { timestamp: 0 });
         Box::new(BlockMetaEvent {
             metadata: EventMetadata::new(
                 block.blockhash.to_string(),
                 "".to_string(),
                 block.slot,
+                block_time.timestamp,
+                block_time.timestamp * 1000,
                 ProtocolType::SDKSystem,
                 EventType::SDKSystem,
                 Pubkey::default(),

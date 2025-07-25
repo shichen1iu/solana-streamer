@@ -50,7 +50,7 @@ impl YellowstoneGrpc {
                 match message {
                     Ok(msg) => {
                         if let Err(e) =
-                            Self::handle_stream_message(msg, &mut tx, None, &mut subscribe_tx).await
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
                         {
                             error!("Error handling message: {:?}", e);
                             break;

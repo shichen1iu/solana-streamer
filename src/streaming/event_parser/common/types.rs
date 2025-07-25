@@ -1,10 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
-use solana_sdk::instruction::CompiledInstruction;
 use solana_sdk::pubkey::Pubkey;
-use solana_transaction_status::{
-    UiCompiledInstruction, UiInstruction, UiTransactionStatusMeta, UiTransactionTokenBalance,
-};
+use solana_transaction_status::UiInstruction;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -158,6 +155,8 @@ pub struct EventMetadata {
     pub id: String,
     pub signature: String,
     pub slot: u64,
+    pub block_time: i64,
+    pub block_time_ms: i64,
     pub program_received_time_ms: i64,
     pub protocol: ProtocolType,
     pub event_type: EventType,
@@ -170,6 +169,8 @@ impl EventMetadata {
         id: String,
         signature: String,
         slot: u64,
+        block_time: i64,
+        block_time_ms: i64,
         protocol: ProtocolType,
         event_type: EventType,
         program_id: Pubkey,
@@ -178,6 +179,8 @@ impl EventMetadata {
             id,
             signature,
             slot,
+            block_time,
+            block_time_ms,
             program_received_time_ms: chrono::Utc::now().timestamp_millis(),
             protocol,
             event_type,

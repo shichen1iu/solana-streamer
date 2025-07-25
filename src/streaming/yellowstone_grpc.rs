@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt, time::Duration};
 use chrono::Local;
 use futures::{channel::mpsc, sink::Sink, SinkExt, Stream, StreamExt};
 use log::{error, info};
+use prost_types::Timestamp;
 use rustls::crypto::{ring::default_provider, CryptoProvider};
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding};
@@ -30,6 +31,7 @@ const MAX_DECODING_MESSAGE_SIZE: usize = 1024 * 1024 * 10;
 #[derive(Clone)]
 pub struct TransactionPretty {
     pub slot: u64,
+    pub block_time: Option<Timestamp>,
     pub signature: Signature,
     pub is_vote: bool,
     pub tx: EncodedTransactionWithStatusMeta,
@@ -54,11 +56,12 @@ impl fmt::Debug for TransactionPretty {
     }
 }
 
-impl From<SubscribeUpdateTransaction> for TransactionPretty {
-    fn from(SubscribeUpdateTransaction { transaction, slot }: SubscribeUpdateTransaction) -> Self {
+impl From<(SubscribeUpdateTransaction, Option<Timestamp>)> for TransactionPretty {
+    fn from((SubscribeUpdateTransaction { transaction, slot }, block_time): (SubscribeUpdateTransaction, Option<Timestamp>)) -> Self {
         let tx = transaction.expect("should be defined");
         Self {
             slot,
+            block_time: block_time,
             signature: Signature::try_from(tx.signature.as_slice()).expect("valid signature"),
             is_vote: tx.is_vote,
             tx: yellowstone_grpc_proto::convert_from::create_tx_with_meta(tx)
@@ -149,17 +152,12 @@ impl YellowstoneGrpc {
     pub async fn handle_stream_message(
         msg: SubscribeUpdate,
         tx: &mut mpsc::Sender<TransactionPretty>,
-        block: Option<&mut mpsc::Sender<SubscribeUpdateBlockMeta>>,
         subscribe_tx: &mut (impl Sink<SubscribeRequest, Error = mpsc::SendError> + Unpin),
     ) -> AnyResult<()> {
+        let created_at = msg.created_at;
         match msg.update_oneof {
-            Some(UpdateOneof::BlockMeta(sut)) => {
-                if let Some(block) = block {
-                    block.try_send(sut)?;
-                }
-            }
             Some(UpdateOneof::Transaction(sut)) => {
-                let transaction_pretty = TransactionPretty::from(sut.clone());
+                let transaction_pretty = TransactionPretty::from((sut, created_at));
                 tx.try_send(transaction_pretty)?;
             }
             Some(UpdateOneof::Ping(_)) => {
@@ -216,7 +214,6 @@ impl YellowstoneGrpc {
 
         // 创建通道
         let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(CHANNEL_SIZE);
-        let (mut block, mut rblock) = mpsc::channel::<SubscribeUpdateBlockMeta>(CHANNEL_SIZE);
 
         // 创建回调函数，使用 Arc 包装以便在多个任务中共享
         let callback = std::sync::Arc::new(Box::new(callback));
@@ -229,7 +226,6 @@ impl YellowstoneGrpc {
                         if let Err(e) = Self::handle_stream_message(
                             msg,
                             &mut tx,
-                            Some(&mut block),
                             &mut subscribe_tx,
                         )
                         .await
@@ -246,16 +242,12 @@ impl YellowstoneGrpc {
             }
         });
 
-        // 为交易处理和区块处理克隆 Arc<Box<F>>
-        let callback_tx = callback.clone();
-        let callback_block = callback;
-
         // 处理交易
         tokio::spawn(async move {
             while let Some(transaction_pretty) = rx.next().await {
                 if let Err(e) = Self::process_event_transaction(
                     transaction_pretty,
-                    &**callback_tx,
+                    &**callback,
                     bot_wallet,
                     protocols.clone(),
                 )
@@ -265,14 +257,7 @@ impl YellowstoneGrpc {
                 }
             }
         });
-        // 处理block
-        tokio::spawn(async move {
-            while let Some(block) = rblock.next().await {
-                if let Err(e) = Self::process_block(block, &**callback_block).await {
-                    error!("Error processing block: {:?}", e);
-                }
-            }
-        });
+        
         tokio::signal::ctrl_c().await?;
         Ok(())
     }
@@ -296,6 +281,7 @@ impl YellowstoneGrpc {
                     transaction_pretty.tx.clone(),
                     &signature,
                     Some(slot),
+                    transaction_pretty.block_time,
                     bot_wallet.clone(),
                 )
                 .await
@@ -305,16 +291,6 @@ impl YellowstoneGrpc {
             }
         }
 
-        Ok(())
-    }
-
-    /// 处理区块
-    async fn process_block<F>(block: SubscribeUpdateBlockMeta, callback: &F) -> AnyResult<()>
-    where
-        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
-    {
-        let event = SDKSystemEventParser::parse_block(block);
-        callback(event);
         Ok(())
     }
 }

@@ -106,6 +106,7 @@ impl ShredStreamGrpc {
                     &versioned_tx,
                     &signature.to_string(),
                     Some(slot),
+                    None,
                     bot_wallet.clone(),
                 )
                 .await

@@ -1,3 +1,4 @@
+use prost_types::Timestamp;
 use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
 use solana_transaction_status::UiCompiledInstruction;
 
@@ -419,9 +420,10 @@ impl EventParser for BonkEventParser {
         inner_instruction: &UiCompiledInstruction,
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner
-            .parse_events_from_inner_instruction(inner_instruction, signature, slot)
+            .parse_events_from_inner_instruction(inner_instruction, signature, slot, block_time)
     }
 
     fn parse_events_from_instruction(
@@ -430,9 +432,10 @@ impl EventParser for BonkEventParser {
         accounts: &[Pubkey],
         signature: &str,
         slot: u64,
+        block_time: Option<Timestamp>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner
-            .parse_events_from_instruction(instruction, accounts, signature, slot)
+            .parse_events_from_instruction(instruction, accounts, signature, slot, block_time)
     }
 
     fn should_handle(&self, program_id: &Pubkey) -> bool {
