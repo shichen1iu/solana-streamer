@@ -14,10 +14,9 @@ use yellowstone_grpc_proto::geyser::{
     SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdate,
     SubscribeUpdateTransaction,
 };
-use yellowstone_grpc_proto::geyser::{SubscribeRequestFilterBlocksMeta, SubscribeUpdateBlockMeta};
+use yellowstone_grpc_proto::geyser::SubscribeRequestFilterBlocksMeta;
 
 use crate::common::AnyResult;
-use crate::streaming::event_parser::core::traits::SDKSystemEventParser;
 use crate::streaming::event_parser::{EventParserFactory, Protocol, UnifiedEvent};
 use maplit::hashmap;
 
