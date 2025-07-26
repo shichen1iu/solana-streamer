@@ -50,6 +50,10 @@ macro_rules! impl_unified_event {
             fn set_transfer_datas(&mut self, transfer_datas: Vec<$crate::streaming::event_parser::common::types::TransferData>) {
                 self.metadata.transfer_datas = transfer_datas;
             }
+
+            fn index(&self) -> String {
+                self.metadata.index.clone()
+            }
         }
     };
 }

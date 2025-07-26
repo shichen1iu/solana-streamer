@@ -135,9 +135,15 @@ impl EventParser for RaydiumCpmmEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner
-            .parse_events_from_inner_instruction(inner_instruction, signature, slot, block_time)
+        self.inner.parse_events_from_inner_instruction(
+            inner_instruction,
+            signature,
+            slot,
+            block_time,
+            index,
+        )
     }
 
     fn parse_events_from_instruction(
@@ -147,9 +153,16 @@ impl EventParser for RaydiumCpmmEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner
-            .parse_events_from_instruction(instruction, accounts, signature, slot, block_time)
+        self.inner.parse_events_from_instruction(
+            instruction,
+            accounts,
+            signature,
+            slot,
+            block_time,
+            index,
+        )
     }
 
     fn should_handle(&self, program_id: &Pubkey) -> bool {

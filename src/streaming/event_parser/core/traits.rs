@@ -52,6 +52,8 @@ pub trait UnifiedEvent: Debug + Send + Sync {
     }
 
     fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>);
+
+    fn index(&self) -> String;
 }
 
 /// 事件解析器trait - 定义了事件解析的核心方法
@@ -64,6 +66,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从指令中解析事件数据
@@ -74,6 +77,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从VersionedTransaction中解析指令事件的通用方法
@@ -106,7 +110,14 @@ pub trait EventParser: Send + Sync {
                             }
                         }
                         if let Ok(mut events) = self
-                            .parse_instruction(instruction, &accounts, signature, slot, block_time)
+                            .parse_instruction(
+                                instruction,
+                                &accounts,
+                                signature,
+                                slot,
+                                block_time,
+                                format!("{}", index),
+                            )
                             .await
                         {
                             if events.len() > 0 {
@@ -231,6 +242,7 @@ pub trait EventParser: Send + Sync {
                                     signature,
                                     slot,
                                     block_time,
+                                    format!("{}.{}", inner_instruction.index, index),
                                 )
                                 .await
                             {
@@ -249,7 +261,13 @@ pub trait EventParser: Send + Sync {
                                 }
                             }
                             if let Ok(mut events) = self
-                                .parse_inner_instruction(compiled, signature, slot, block_time)
+                                .parse_inner_instruction(
+                                    compiled,
+                                    signature,
+                                    slot,
+                                    block_time,
+                                    format!("{}.{}", inner_instruction.index, index),
+                                )
                                 .await
                             {
                                 if events.len() > 0 {
@@ -276,11 +294,28 @@ pub trait EventParser: Send + Sync {
         if instruction_events.len() > 0 && inner_instruction_events.len() > 0 {
             for instruction_event in &mut instruction_events {
                 for inner_instruction_event in &inner_instruction_events {
-                    if instruction_event.id() == inner_instruction_event.id()
-                        && instruction_event.event_type() == inner_instruction_event.event_type()
-                    {
-                        instruction_event.merge(inner_instruction_event.clone_boxed());
-                        break;
+                    if instruction_event.id() == inner_instruction_event.id() {
+                        let i_index = instruction_event.index();
+                        let in_index = inner_instruction_event.index();
+                        if !i_index.contains(".") && in_index.contains(".") {
+                            let in_index_parent_index = in_index.split(".").nth(0).unwrap();
+                            if in_index_parent_index == i_index {
+                                instruction_event.merge(inner_instruction_event.clone_boxed());
+                                break;
+                            }
+                        } else if i_index.contains(".") && in_index.contains(".") {
+                            // 嵌套指令
+                            let i_index_parent_index = i_index.split(".").nth(0).unwrap();
+                            let in_index_parent_index = in_index.split(".").nth(0).unwrap();
+                            if i_index_parent_index == in_index_parent_index {
+                                let i_index_child_index = i_index.split(".").nth(1).unwrap();
+                                let in_index_child_index = in_index.split(".").nth(1).unwrap();
+                                if in_index_child_index > i_index_child_index {
+                                    instruction_event.merge(inner_instruction_event.clone_boxed());
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -329,10 +364,16 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
-        let events =
-            self.parse_events_from_inner_instruction(instruction, signature, slot, block_time);
+        let events = self.parse_events_from_inner_instruction(
+            instruction,
+            signature,
+            slot,
+            block_time,
+            index,
+        );
         Ok(events)
     }
 
@@ -343,10 +384,17 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
-        let events =
-            self.parse_events_from_instruction(instruction, accounts, signature, slot, block_time);
+        let events = self.parse_events_from_instruction(
+            instruction,
+            accounts,
+            signature,
+            slot,
+            block_time,
+            index,
+        );
         Ok(events)
     }
 
@@ -427,6 +475,7 @@ impl GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Option<Box<dyn UnifiedEvent>> {
         let timestamp = block_time.unwrap_or(Timestamp {
             seconds: 0,
@@ -442,6 +491,7 @@ impl GenericEventParser {
             self.protocol_type.clone(),
             config.event_type.clone(),
             self.program_id,
+            index,
         );
         (config.inner_instruction_parser)(data, metadata)
     }
@@ -455,6 +505,7 @@ impl GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Option<Box<dyn UnifiedEvent>> {
         let timestamp = block_time.unwrap_or(Timestamp {
             seconds: 0,
@@ -470,6 +521,7 @@ impl GenericEventParser {
             self.protocol_type.clone(),
             config.event_type.clone(),
             self.program_id,
+            index,
         );
         (config.instruction_parser)(data, account_pubkeys, metadata)
     }
@@ -484,6 +536,7 @@ impl EventParser for GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let inner_instruction_data = inner_instruction.data.clone();
         let inner_instruction_data_decoded =
@@ -498,9 +551,14 @@ impl EventParser for GenericEventParser {
         for (disc, configs) in &self.inner_instruction_configs {
             if discriminator_matches(&inner_instruction_data_decoded_str, disc) {
                 for config in configs {
-                    if let Some(event) = self
-                        .parse_inner_instruction_event(config, data, signature, slot, block_time)
-                    {
+                    if let Some(event) = self.parse_inner_instruction_event(
+                        config,
+                        data,
+                        signature,
+                        slot,
+                        block_time,
+                        index.clone(),
+                    ) {
                         events.push(event);
                     }
                 }
@@ -517,6 +575,7 @@ impl EventParser for GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let program_id = accounts[instruction.program_id_index as usize];
         if !self.should_handle(&program_id) {
@@ -548,6 +607,7 @@ impl EventParser for GenericEventParser {
                         signature,
                         slot,
                         block_time,
+                        index.clone(),
                     ) {
                         events.push(event);
                     }

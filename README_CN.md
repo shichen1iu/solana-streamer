@@ -33,14 +33,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.4" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.5" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = "0.1.4"
+solana-streamer-sdk = "0.1.5"
 ```
 
 ## 使用示例
@@ -51,10 +51,16 @@ use solana_streamer_sdk::{
     streaming::{
         event_parser::{
             protocols::{
-                bonk::{BonkPoolCreateEvent, BonkTradeEvent}, pumpfun::{PumpFunCreateTokenEvent, PumpFunTradeEvent}, pumpswap::{
-                    PumpSwapBuyEvent, PumpSwapCreatePoolEvent, PumpSwapDepositEvent,
-                    PumpSwapSellEvent, PumpSwapWithdrawEvent,
-                }, raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event}, raydium_cpmm::RaydiumCpmmSwapEvent
+                bonk::{parser::BONK_PROGRAM_ID, BonkPoolCreateEvent, BonkTradeEvent},
+                pumpfun::{parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunTradeEvent},
+                pumpswap::{
+                    parser::PUMPSWAP_PROGRAM_ID, PumpSwapBuyEvent, PumpSwapCreatePoolEvent,
+                    PumpSwapDepositEvent, PumpSwapSellEvent, PumpSwapWithdrawEvent,
+                },
+                raydium_clmm::{
+                    parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
+                },
+                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent},
             },
             Protocol, UnifiedEvent,
         },
@@ -78,6 +84,8 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let callback = create_event_callback();
+
+    // 将会从交易中尝试解析对应的协议事件
     let protocols = vec![
         Protocol::PumpFun,
         Protocol::PumpSwap,
@@ -86,9 +94,29 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumClmm,
     ];
 
+    // 过滤账号
+    let account_include = vec![
+        PUMPFUN_PROGRAM_ID.to_string(),      // 监听 pumpfun 程序ID
+        PUMPSWAP_PROGRAM_ID.to_string(),     // 监听 pumpswap 程序ID
+        BONK_PROGRAM_ID.to_string(),         // 监听 bonk 程序ID
+        RAYDIUM_CPMM_PROGRAM_ID.to_string(), // 监听 raydium_cpmm 程序ID
+        RAYDIUM_CLMM_PROGRAM_ID.to_string(), // 监听 raydium_clmm 程序ID
+        "xxxxxxxx".to_string(),              // 监听 xxxxx 账号
+    ];
+    let account_exclude = vec![];
+    let account_required = vec![];
+
     println!("开始监听事件，按 Ctrl+C 停止...");
-    grpc.subscribe_events(protocols, None, None, None, None, None, callback)
-        .await?;
+    grpc.subscribe_events_v2(
+        protocols,
+        None,
+        account_include,
+        account_exclude,
+        account_required,
+        None,
+        callback,
+    )
+    .await?;
 
     Ok(())
 }

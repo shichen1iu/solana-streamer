@@ -3,14 +3,16 @@ use solana_streamer_sdk::{
     streaming::{
         event_parser::{
             protocols::{
-                bonk::{BonkPoolCreateEvent, BonkTradeEvent},
-                pumpfun::{PumpFunCreateTokenEvent, PumpFunTradeEvent},
+                bonk::{parser::BONK_PROGRAM_ID, BonkPoolCreateEvent, BonkTradeEvent},
+                pumpfun::{parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunTradeEvent},
                 pumpswap::{
-                    PumpSwapBuyEvent, PumpSwapCreatePoolEvent, PumpSwapDepositEvent,
-                    PumpSwapSellEvent, PumpSwapWithdrawEvent,
+                    parser::PUMPSWAP_PROGRAM_ID, PumpSwapBuyEvent, PumpSwapCreatePoolEvent,
+                    PumpSwapDepositEvent, PumpSwapSellEvent, PumpSwapWithdrawEvent,
                 },
-                raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event},
-                raydium_cpmm::RaydiumCpmmSwapEvent,
+                raydium_clmm::{
+                    parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
+                },
+                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent},
             },
             Protocol, UnifiedEvent,
         },
@@ -26,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
-    println!("正在订阅 GRPC 事件...");
+    println!("Subscribing to GRPC events...");
 
     let grpc = YellowstoneGrpc::new(
         "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
@@ -34,6 +36,8 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let callback = create_event_callback();
+
+    // Will try to parse corresponding protocol events from transactions
     let protocols = vec![
         Protocol::PumpFun,
         Protocol::PumpSwap,
@@ -42,9 +46,29 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumClmm,
     ];
 
-    println!("开始监听事件，按 Ctrl+C 停止...");
-    grpc.subscribe_events(protocols, None, None, None, None, None, callback)
-        .await?;
+    // Filter accounts
+    let account_include = vec![
+        PUMPFUN_PROGRAM_ID.to_string(),      // Listen to pumpfun program ID
+        PUMPSWAP_PROGRAM_ID.to_string(),     // Listen to pumpswap program ID
+        BONK_PROGRAM_ID.to_string(),         // Listen to bonk program ID
+        RAYDIUM_CPMM_PROGRAM_ID.to_string(), // Listen to raydium_cpmm program ID
+        RAYDIUM_CLMM_PROGRAM_ID.to_string(), // Listen to raydium_clmm program ID
+        "xxxxxxxx".to_string(),              // Listen to xxxxx account
+    ];
+    let account_exclude = vec![];
+    let account_required = vec![];
+
+    println!("Starting to listen for events, press Ctrl+C to stop...");
+    grpc.subscribe_events_v2(
+        protocols,
+        None,
+        account_include,
+        account_exclude,
+        account_required,
+        None,
+        callback,
+    )
+    .await?;
 
     Ok(())
 }

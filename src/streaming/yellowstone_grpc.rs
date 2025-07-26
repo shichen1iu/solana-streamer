@@ -175,7 +175,97 @@ impl YellowstoneGrpc {
         Ok(())
     }
 
+    /// Subscribe to Yellowstone GRPC service events with advanced filtering options
+    ///
+    /// This method allows subscribing to specific protocol events with more granular account filtering.
+    /// It processes transactions in real-time and calls the provided callback function when matching events are found.
+    ///
+    /// # Parameters
+    ///
+    /// * `protocols` - List of protocols to parse (e.g., PumpFun, PumpSwap, Bonk, RaydiumCpmm)
+    /// * `bot_wallet` - Optional bot wallet address. If passed: in PumpFunTradeEvent if user is in the address, is_bot=true will be set. In BonkTradeEvent if payer is in the address, is_bot=true will be set. Default is false.
+    /// * `account_include` - List of account addresses to include in the subscription
+    /// * `account_exclude` - List of account addresses to exclude from the subscription
+    /// * `account_required` - List of account addresses that must be present in transactions
+    /// * `commitment` - Optional commitment level for the subscription
+    /// * `callback` - Function to call when matching events are found
+    pub async fn subscribe_events_v2<F>(
+        &self,
+        protocols: Vec<Protocol>,
+        bot_wallet: Option<Pubkey>,
+        account_include: Vec<String>,
+        account_exclude: Vec<String>,
+        account_required: Vec<String>,
+        commitment: Option<CommitmentLevel>,
+        callback: F,
+    ) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
+    {
+        if account_include.is_empty() && account_exclude.is_empty() && account_required.is_empty() {
+            return Err(anyhow::anyhow!(
+                "account_include or account_exclude or account_required cannot be empty"
+            ));
+        }
+
+        let transactions =
+            self.get_subscribe_request_filter(account_include, account_exclude, account_required);
+        // Subscribe to events
+        let (mut subscribe_tx, mut stream) = self
+            .subscribe_with_request(transactions, commitment)
+            .await?;
+
+        // Create channel
+        let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(CHANNEL_SIZE);
+
+        // Create callback function, wrap with Arc to share across multiple tasks
+        let callback = std::sync::Arc::new(Box::new(callback));
+
+        // Start task to process the stream
+        tokio::spawn(async move {
+            while let Some(message) = stream.next().await {
+                match message {
+                    Ok(msg) => {
+                        if let Err(e) =
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
+                        {
+                            error!("Error handling message: {:?}", e);
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        error!("Stream error: {error:?}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Process transactions
+        tokio::spawn(async move {
+            while let Some(transaction_pretty) = rx.next().await {
+                if let Err(e) = Self::process_event_transaction(
+                    transaction_pretty,
+                    &**callback,
+                    bot_wallet,
+                    protocols.clone(),
+                )
+                .await
+                {
+                    error!("Error processing transaction: {:?}", e);
+                }
+            }
+        });
+
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    }
+
     /// 订阅事件
+    #[deprecated(
+        since = "0.1.5",
+        note = "This method will be removed, please use the new API: subscribe_events_v2"
+    )]
     pub async fn subscribe_events<F>(
         &self,
         protocols: Vec<Protocol>,
@@ -274,17 +364,18 @@ impl YellowstoneGrpc {
             let tx_clone = transaction_pretty.tx.clone();
             let signature_clone = signature.clone();
             let bot_wallet_clone = bot_wallet.clone();
-            
+
             futures.push(tokio::spawn(async move {
-                parser.parse_transaction(
-                    tx_clone,
-                    &signature_clone,
-                    Some(slot),
-                    transaction_pretty.block_time,
-                    bot_wallet_clone,
-                )
-                .await
-                .unwrap_or_else(|_e| vec![])
+                parser
+                    .parse_transaction(
+                        tx_clone,
+                        &signature_clone,
+                        Some(slot),
+                        transaction_pretty.block_time,
+                        bot_wallet_clone,
+                    )
+                    .await
+                    .unwrap_or_else(|_e| vec![])
             }));
         }
 

@@ -3,7 +3,7 @@ use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
 use solana_transaction_status::UiCompiledInstruction;
 
 use crate::streaming::event_parser::{
-    common::{EventMetadata, EventType, ProtocolType, read_u64_le},
+    common::{read_u64_le, EventMetadata, EventType, ProtocolType},
     core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
     protocols::pumpswap::{
         discriminators, PumpSwapBuyEvent, PumpSwapCreatePoolEvent, PumpSwapDepositEvent,
@@ -67,7 +67,10 @@ impl PumpSwapEventParser {
     }
 
     /// 解析买入日志事件
-    fn parse_buy_inner_instruction(data: &[u8], metadata: EventMetadata) -> Option<Box<dyn UnifiedEvent>> {
+    fn parse_buy_inner_instruction(
+        data: &[u8],
+        metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
         if let Ok(event) = borsh::from_slice::<PumpSwapBuyEvent>(data) {
             let mut metadata = metadata;
             metadata.set_id(format!(
@@ -84,7 +87,10 @@ impl PumpSwapEventParser {
     }
 
     /// 解析卖出日志事件
-    fn parse_sell_inner_instruction(data: &[u8], metadata: EventMetadata) -> Option<Box<dyn UnifiedEvent>> {
+    fn parse_sell_inner_instruction(
+        data: &[u8],
+        metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
         if let Ok(event) = borsh::from_slice::<PumpSwapSellEvent>(data) {
             let mut metadata = metadata;
             metadata.set_id(format!(
@@ -121,7 +127,10 @@ impl PumpSwapEventParser {
     }
 
     /// 解析存款日志事件
-    fn parse_deposit_inner_instruction(data: &[u8], metadata: EventMetadata) -> Option<Box<dyn UnifiedEvent>> {
+    fn parse_deposit_inner_instruction(
+        data: &[u8],
+        metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
         if let Ok(event) = borsh::from_slice::<PumpSwapDepositEvent>(data) {
             let mut metadata = metadata;
             metadata.set_id(format!(
@@ -138,7 +147,10 @@ impl PumpSwapEventParser {
     }
 
     /// 解析提款日志事件
-    fn parse_withdraw_inner_instruction(data: &[u8], metadata: EventMetadata) -> Option<Box<dyn UnifiedEvent>> {
+    fn parse_withdraw_inner_instruction(
+        data: &[u8],
+        metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
         if let Ok(event) = borsh::from_slice::<PumpSwapWithdrawEvent>(data) {
             let mut metadata = metadata;
             metadata.set_id(format!(
@@ -362,9 +374,15 @@ impl EventParser for PumpSwapEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner
-            .parse_events_from_inner_instruction(inner_instruction, signature, slot, block_time)
+        self.inner.parse_events_from_inner_instruction(
+            inner_instruction,
+            signature,
+            slot,
+            block_time,
+            index,
+        )
     }
 
     fn parse_events_from_instruction(
@@ -374,9 +392,16 @@ impl EventParser for PumpSwapEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner
-            .parse_events_from_instruction(instruction, accounts, signature, slot, block_time)
+        self.inner.parse_events_from_instruction(
+            instruction,
+            accounts,
+            signature,
+            slot,
+            block_time,
+            index,
+        )
     }
 
     fn should_handle(&self, program_id: &Pubkey) -> bool {

@@ -162,6 +162,7 @@ pub struct EventMetadata {
     pub event_type: EventType,
     pub program_id: Pubkey,
     pub transfer_datas: Vec<TransferData>,
+    pub index: String,
 }
 
 impl EventMetadata {
@@ -174,6 +175,7 @@ impl EventMetadata {
         protocol: ProtocolType,
         event_type: EventType,
         program_id: Pubkey,
+        index: String,
     ) -> Self {
         Self {
             id,
@@ -186,6 +188,7 @@ impl EventMetadata {
             event_type,
             program_id,
             transfer_datas: vec![],
+            index,
         }
     }
     pub fn set_id(&mut self, id: String) {
