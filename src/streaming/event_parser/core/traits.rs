@@ -326,8 +326,18 @@ pub trait EventParser: Send + Sync {
                             let i_index_parent_index = i_index.split(".").nth(0).unwrap();
                             let in_index_parent_index = in_index.split(".").nth(0).unwrap();
                             if i_index_parent_index == in_index_parent_index {
-                                let i_index_child_index = i_index.split(".").nth(1).unwrap();
-                                let in_index_child_index = in_index.split(".").nth(1).unwrap();
+                                let i_index_child_index = i_index
+                                    .split(".")
+                                    .nth(1)
+                                    .unwrap()
+                                    .parse::<u32>()
+                                    .unwrap_or(0);
+                                let in_index_child_index = in_index
+                                    .split(".")
+                                    .nth(1)
+                                    .unwrap()
+                                    .parse::<u32>()
+                                    .unwrap_or(0);
                                 if in_index_child_index > i_index_child_index {
                                     instruction_event.merge(inner_instruction_event.clone_boxed());
                                     break;
