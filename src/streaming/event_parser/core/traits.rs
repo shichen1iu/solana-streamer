@@ -20,39 +20,47 @@ use crate::streaming::event_parser::{
     },
 };
 
-/// 统一事件接口 - 所有协议的事件都需要实现此trait
+/// Unified Event Interface - All protocol events must implement this trait
 pub trait UnifiedEvent: Debug + Send + Sync {
-    /// 获取事件ID
+    /// Get event ID
     fn id(&self) -> &str;
 
-    /// 获取事件类型
+    /// Get event type
     fn event_type(&self) -> EventType;
 
-    /// 获取交易签名
+    /// Get transaction signature
     fn signature(&self) -> &str;
 
-    /// 获取槽位号
+    /// Get slot number
     fn slot(&self) -> u64;
 
-    /// 获取程序接收的时间戳(毫秒)
+    /// Get program received timestamp (milliseconds)
     fn program_received_time_ms(&self) -> i64;
 
-    /// 将事件转换为Any以便向下转型
+    /// Processing time consumption (milliseconds)
+    fn program_handle_time_consuming_ms(&self) -> i64;
+
+    /// Set processing time consumption (milliseconds)
+    fn set_program_handle_time_consuming_ms(&mut self, program_handle_time_consuming_ms: i64);
+
+    /// Convert event to Any for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
 
-    /// 将事件转换为可变Any以便向下转型
+    /// Convert event to mutable Any for downcasting
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 
-    /// 克隆事件
+    /// Clone the event
     fn clone_boxed(&self) -> Box<dyn UnifiedEvent>;
 
-    /// 合并事件（可选实现）
+    /// Merge events (optional implementation)
     fn merge(&mut self, _other: Box<dyn UnifiedEvent>) {
-        // 默认实现：不进行任何合并操作
+        // Default implementation: no merging operation
     }
 
+    /// Set transfer datas
     fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>);
 
+    /// Get index
     fn index(&self) -> String;
 }
 
@@ -66,6 +74,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
@@ -77,6 +86,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
@@ -87,6 +97,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         accounts: &[Pubkey],
         inner_instructions: &[UiInnerInstructions],
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
@@ -116,6 +127,7 @@ pub trait EventParser: Send + Sync {
                                 signature,
                                 slot,
                                 block_time,
+                                program_received_time_ms,
                                 format!("{}", index),
                             )
                             .await
@@ -153,6 +165,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         bot_wallet: Option<Pubkey>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let accounts: Vec<Pubkey> = versioned_tx.message.static_account_keys().to_vec();
@@ -162,6 +175,7 @@ pub trait EventParser: Send + Sync {
                 signature,
                 slot,
                 block_time,
+                program_received_time_ms,
                 &accounts,
                 &vec![],
             )
@@ -176,6 +190,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         bot_wallet: Option<Pubkey>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let transaction = tx.transaction;
@@ -212,6 +227,7 @@ pub trait EventParser: Send + Sync {
                     signature,
                     slot,
                     block_time,
+                    program_received_time_ms,
                     &accounts,
                     &inner_instructions,
                 )
@@ -242,6 +258,7 @@ pub trait EventParser: Send + Sync {
                                     signature,
                                     slot,
                                     block_time,
+                                    program_received_time_ms,
                                     format!("{}.{}", inner_instruction.index, index),
                                 )
                                 .await
@@ -266,6 +283,7 @@ pub trait EventParser: Send + Sync {
                                     signature,
                                     slot,
                                     block_time,
+                                    program_received_time_ms,
                                     format!("{}.{}", inner_instruction.index, index),
                                 )
                                 .await
@@ -328,14 +346,20 @@ pub trait EventParser: Send + Sync {
         mut events: Vec<Box<dyn UnifiedEvent>>,
         bot_wallet: Option<Pubkey>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        let mut dev_address = None;
+        let mut dev_address = vec![];
         let mut bonk_dev_address = None;
         for event in &mut events {
             if let Some(token_info) = event.as_any().downcast_ref::<PumpFunCreateTokenEvent>() {
-                dev_address = Some(token_info.user);
+                dev_address.push(token_info.user);
+                if token_info.creator != Pubkey::default() && token_info.creator != token_info.user
+                {
+                    dev_address.push(token_info.creator);
+                }
             } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpFunTradeEvent>()
             {
-                if Some(trade_info.user) == dev_address {
+                if dev_address.contains(&trade_info.user)
+                    || dev_address.contains(&trade_info.creator)
+                {
                     trade_info.is_dev_create_token_trade = true;
                 } else if Some(trade_info.user) == bot_wallet {
                     trade_info.is_bot = true;
@@ -354,6 +378,8 @@ pub trait EventParser: Send + Sync {
                     trade_info.is_dev_create_token_trade = false;
                 }
             }
+            let now = chrono::Utc::now().timestamp_millis();
+            event.set_program_handle_time_consuming_ms(now - event.program_received_time_ms());
         }
         events
     }
@@ -364,6 +390,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
@@ -372,6 +399,7 @@ pub trait EventParser: Send + Sync {
             signature,
             slot,
             block_time,
+            program_received_time_ms,
             index,
         );
         Ok(events)
@@ -384,6 +412,7 @@ pub trait EventParser: Send + Sync {
         signature: &str,
         slot: Option<u64>,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
@@ -393,6 +422,7 @@ pub trait EventParser: Send + Sync {
             signature,
             slot,
             block_time,
+            program_received_time_ms,
             index,
         );
         Ok(events)
@@ -475,6 +505,7 @@ impl GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Option<Box<dyn UnifiedEvent>> {
         let timestamp = block_time.unwrap_or(Timestamp {
@@ -492,6 +523,7 @@ impl GenericEventParser {
             config.event_type.clone(),
             self.program_id,
             index,
+            program_received_time_ms,
         );
         (config.inner_instruction_parser)(data, metadata)
     }
@@ -505,6 +537,7 @@ impl GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Option<Box<dyn UnifiedEvent>> {
         let timestamp = block_time.unwrap_or(Timestamp {
@@ -522,6 +555,7 @@ impl GenericEventParser {
             config.event_type.clone(),
             self.program_id,
             index,
+            program_received_time_ms,
         );
         (config.instruction_parser)(data, account_pubkeys, metadata)
     }
@@ -536,6 +570,7 @@ impl EventParser for GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let inner_instruction_data = inner_instruction.data.clone();
@@ -557,6 +592,7 @@ impl EventParser for GenericEventParser {
                         signature,
                         slot,
                         block_time,
+                        program_received_time_ms,
                         index.clone(),
                     ) {
                         events.push(event);
@@ -575,6 +611,7 @@ impl EventParser for GenericEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let program_id = accounts[instruction.program_id_index as usize];
@@ -607,6 +644,7 @@ impl EventParser for GenericEventParser {
                         signature,
                         slot,
                         block_time,
+                        program_received_time_ms,
                         index.clone(),
                     ) {
                         events.push(event);

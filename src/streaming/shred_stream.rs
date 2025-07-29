@@ -95,6 +95,7 @@ impl ShredStreamGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
     {
+        let program_received_time_ms = chrono::Utc::now().timestamp_millis();
         let slot = transaction_with_slot.slot;
         let versioned_tx = transaction_with_slot.transaction;
         let signature = versioned_tx.signatures[0];
@@ -107,6 +108,7 @@ impl ShredStreamGrpc {
                     &signature.to_string(),
                     Some(slot),
                     None,
+                    program_received_time_ms,
                     bot_wallet.clone(),
                 )
                 .await

@@ -27,6 +27,14 @@ macro_rules! impl_unified_event {
                 self.metadata.program_received_time_ms
             }
 
+            fn program_handle_time_consuming_ms(&self) -> i64 {
+                self.metadata.program_handle_time_consuming_ms
+            }
+
+            fn set_program_handle_time_consuming_ms(&mut self, program_handle_time_consuming_ms: i64) {
+                self.metadata.program_handle_time_consuming_ms = program_handle_time_consuming_ms;
+            }
+
             fn as_any(&self) -> &dyn std::any::Any {
                 self
             }

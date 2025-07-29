@@ -355,7 +355,7 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
     {
-        // let start_time = std::time::Instant::now();
+        let program_received_time_ms = chrono::Utc::now().timestamp_millis();
         let slot = transaction_pretty.slot;
         let signature = transaction_pretty.signature.to_string();
         let mut futures = Vec::new();
@@ -372,6 +372,7 @@ impl YellowstoneGrpc {
                         &signature_clone,
                         Some(slot),
                         transaction_pretty.block_time,
+                        program_received_time_ms,
                         bot_wallet_clone,
                     )
                     .await
@@ -387,9 +388,6 @@ impl YellowstoneGrpc {
                 }
             }
         }
-        // let elapsed = start_time.elapsed();
-        // println!("处理交易耗时: {:?}", elapsed);
-
         Ok(())
     }
 }

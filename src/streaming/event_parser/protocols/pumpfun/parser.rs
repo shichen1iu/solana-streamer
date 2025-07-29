@@ -226,6 +226,7 @@ impl EventParser for PumpFunEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_inner_instruction(
@@ -233,6 +234,7 @@ impl EventParser for PumpFunEventParser {
             signature,
             slot,
             block_time,
+            program_received_time_ms,
             index,
         )
     }
@@ -244,6 +246,7 @@ impl EventParser for PumpFunEventParser {
         signature: &str,
         slot: u64,
         block_time: Option<Timestamp>,
+        program_received_time_ms: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_instruction(
@@ -252,6 +255,7 @@ impl EventParser for PumpFunEventParser {
             signature,
             slot,
             block_time,
+            program_received_time_ms,
             index,
         )
     }

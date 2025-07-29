@@ -158,6 +158,7 @@ pub struct EventMetadata {
     pub block_time: i64,
     pub block_time_ms: i64,
     pub program_received_time_ms: i64,
+    pub program_handle_time_consuming_ms: i64,
     pub protocol: ProtocolType,
     pub event_type: EventType,
     pub program_id: Pubkey,
@@ -176,6 +177,7 @@ impl EventMetadata {
         event_type: EventType,
         program_id: Pubkey,
         index: String,
+        program_received_time_ms: i64,
     ) -> Self {
         Self {
             id,
@@ -183,7 +185,8 @@ impl EventMetadata {
             slot,
             block_time,
             block_time_ms,
-            program_received_time_ms: chrono::Utc::now().timestamp_millis(),
+            program_received_time_ms: program_received_time_ms,
+            program_handle_time_consuming_ms: 0,
             protocol,
             event_type,
             program_id,
