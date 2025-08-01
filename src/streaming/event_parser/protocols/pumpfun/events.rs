@@ -2,8 +2,8 @@ use borsh::BorshDeserialize;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 
-use crate::streaming::event_parser::common::EventMetadata;
 use crate::impl_unified_event;
+use crate::streaming::event_parser::common::EventMetadata;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
 pub struct PumpFunCreateTokenEvent {
@@ -55,7 +55,7 @@ pub struct PumpFunTradeEvent {
     pub real_sol_reserves: u64,
     pub real_token_reserves: u64,
     pub fee_recipient: Pubkey,
-    pub fee_basis_points: u64, 
+    pub fee_basis_points: u64,
     pub fee: u64,
     pub creator: Pubkey,
     pub creator_fee_basis_points: u64,
@@ -78,6 +78,10 @@ pub struct PumpFunTradeEvent {
     pub is_bot: bool,
     #[borsh(skip)]
     pub is_dev_create_token_trade: bool, // 是否是dev创建token的交易
+    #[borsh(skip)]
+    pub global_volume_accumulator: Pubkey,
+    #[borsh(skip)]
+    pub user_volume_accumulator: Pubkey,
 }
 
 impl_unified_event!(
