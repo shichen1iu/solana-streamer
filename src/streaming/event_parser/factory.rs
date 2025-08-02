@@ -64,7 +64,8 @@ impl std::str::FromStr for Protocol {
 }
 
 static EVENT_PARSERS: LazyLock<HashMap<Protocol, Arc<dyn EventParser>>> = LazyLock::new(|| {
-    let mut parsers: HashMap<Protocol, Arc<dyn EventParser>> = HashMap::new();
+    // 预分配容量，避免动态扩容
+    let mut parsers: HashMap<Protocol, Arc<dyn EventParser>> = HashMap::with_capacity(5);
     parsers.insert(Protocol::PumpSwap, Arc::new(PumpSwapEventParser::new()));
     parsers.insert(Protocol::PumpFun, Arc::new(PumpFunEventParser::new()));
     parsers.insert(Protocol::Bonk, Arc::new(BonkEventParser::new()));
@@ -82,7 +83,7 @@ impl EventParserFactory {
     /// 创建指定协议的事件解析器
     pub fn create_parser(protocol: Protocol) -> Arc<dyn EventParser> {
         EVENT_PARSERS.get(&protocol).cloned().unwrap_or_else(|| {
-            panic!("Parser for protocol {} not found", protocol);
+            panic!("Parser for protocol {protocol} not found");
         })
     }
 

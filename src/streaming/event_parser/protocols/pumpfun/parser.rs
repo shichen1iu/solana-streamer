@@ -17,6 +17,12 @@ pub struct PumpFunEventParser {
     inner: GenericEventParser,
 }
 
+impl Default for PumpFunEventParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PumpFunEventParser {
     pub fn new() -> Self {
         // 配置所有事件类型
@@ -61,10 +67,10 @@ impl PumpFunEventParser {
                 metadata.signature,
                 event.name,
                 event.symbol,
-                event.mint.to_string()
+                event.mint
             ));
             Some(Box::new(PumpFunCreateTokenEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -82,12 +88,12 @@ impl PumpFunEventParser {
             metadata.set_id(format!(
                 "{}-{}-{}-{}",
                 metadata.signature,
-                event.mint.to_string(),
-                event.user.to_string(),
-                event.is_buy.to_string()
+                event.mint,
+                event.user,
+                event.is_buy
             ));
             Some(Box::new(PumpFunTradeEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -129,7 +135,7 @@ impl PumpFunEventParser {
             metadata.signature,
             name,
             symbol,
-            accounts[0].to_string()
+            accounts[0]
         ));
 
         Some(Box::new(PumpFunCreateTokenEvent {
@@ -162,9 +168,9 @@ impl PumpFunEventParser {
         metadata.set_id(format!(
             "{}-{}-{}-{}",
             metadata.signature,
-            accounts[2].to_string(),
-            accounts[6].to_string(),
-            true.to_string()
+            accounts[2],
+            accounts[6],
+            true
         ));
         Some(Box::new(PumpFunTradeEvent {
             metadata,
@@ -199,9 +205,9 @@ impl PumpFunEventParser {
         metadata.set_id(format!(
             "{}-{}-{}-{}",
             metadata.signature,
-            accounts[2].to_string(),
-            accounts[6].to_string(),
-            false.to_string()
+            accounts[2],
+            accounts[6],
+            false
         ));
         Some(Box::new(PumpFunTradeEvent {
             metadata,
@@ -267,6 +273,6 @@ impl EventParser for PumpFunEventParser {
     }
 
     fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
+        vec![PUMPFUN_PROGRAM_ID]
     }
 }

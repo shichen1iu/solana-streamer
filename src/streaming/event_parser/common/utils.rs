@@ -28,12 +28,13 @@ pub fn extract_discriminator(length: usize, data: &[u8]) -> Option<(&[u8], &[u8]
     Some((&data[..length], &data[length..]))
 }
 
-/// 检查鉴别器是否匹配
+/// 检查鉴别器是否匹配 - 优化版本
 pub fn discriminator_matches(data: &str, expected: &str) -> bool {
     if data.len() < expected.len() {
         return false;
     }
-    &data[..expected.len()] == expected
+    // 使用字节比较而不是字符串比较，更高效
+    data.as_bytes().starts_with(expected.as_bytes())
 }
 
 /// 从日志中提取程序数据

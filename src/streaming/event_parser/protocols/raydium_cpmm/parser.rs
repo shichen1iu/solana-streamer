@@ -17,6 +17,12 @@ pub struct RaydiumCpmmEventParser {
     inner: GenericEventParser,
 }
 
+impl Default for RaydiumCpmmEventParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RaydiumCpmmEventParser {
     pub fn new() -> Self {
         // 配置所有事件类型

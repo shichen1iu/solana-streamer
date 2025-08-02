@@ -20,6 +20,12 @@ pub struct PumpSwapEventParser {
     inner: GenericEventParser,
 }
 
+impl Default for PumpSwapEventParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PumpSwapEventParser {
     pub fn new() -> Self {
         // 配置所有事件类型
@@ -78,7 +84,7 @@ impl PumpSwapEventParser {
                 metadata.signature, event.user, event.pool, event.base_amount_out
             ));
             Some(Box::new(PumpSwapBuyEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -98,7 +104,7 @@ impl PumpSwapEventParser {
                 metadata.signature, event.user, event.pool, event.base_amount_in
             ));
             Some(Box::new(PumpSwapSellEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -118,7 +124,7 @@ impl PumpSwapEventParser {
                 metadata.signature, event.pool, event.creator, event.base_amount_in
             ));
             Some(Box::new(PumpSwapCreatePoolEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -138,7 +144,7 @@ impl PumpSwapEventParser {
                 metadata.signature, event.pool, event.user, event.lp_token_amount_out
             ));
             Some(Box::new(PumpSwapDepositEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -158,7 +164,7 @@ impl PumpSwapEventParser {
                 metadata.signature, event.pool, event.user, event.lp_token_amount_in
             ));
             Some(Box::new(PumpSwapWithdrawEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -413,6 +419,6 @@ impl EventParser for PumpSwapEventParser {
     }
 
     fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
+        vec![PUMPSWAP_PROGRAM_ID]
     }
 }

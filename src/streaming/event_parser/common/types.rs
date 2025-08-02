@@ -2,8 +2,80 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::UiInstruction;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+// 对象池大小配置
+const EVENT_METADATA_POOL_SIZE: usize = 1000;
+const TRANSFER_DATA_POOL_SIZE: usize = 2000;
+
+/// 事件元数据对象池
+pub struct EventMetadataPool {
+    pool: Arc<Mutex<Vec<EventMetadata>>>,
+}
+
+impl Default for EventMetadataPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventMetadataPool {
+    pub fn new() -> Self {
+        Self {
+            pool: Arc::new(Mutex::new(Vec::with_capacity(EVENT_METADATA_POOL_SIZE))),
+        }
+    }
+
+    pub async fn acquire(&self) -> Option<EventMetadata> {
+        let mut pool = self.pool.lock().await;
+        pool.pop()
+    }
+
+    pub async fn release(&self, metadata: EventMetadata) {
+        let mut pool = self.pool.lock().await;
+        if pool.len() < EVENT_METADATA_POOL_SIZE {
+            pool.push(metadata);
+        }
+    }
+}
+
+/// 传输数据对象池
+pub struct TransferDataPool {
+    pool: Arc<Mutex<Vec<TransferData>>>,
+}
+
+impl Default for TransferDataPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TransferDataPool {
+    pub fn new() -> Self {
+        Self {
+            pool: Arc::new(Mutex::new(Vec::with_capacity(TRANSFER_DATA_POOL_SIZE))),
+        }
+    }
+
+    pub async fn acquire(&self) -> Option<TransferData> {
+        let mut pool = self.pool.lock().await;
+        pool.pop()
+    }
+
+    pub async fn release(&self, transfer_data: TransferData) {
+        let mut pool = self.pool.lock().await;
+        if pool.len() < TRANSFER_DATA_POOL_SIZE {
+            pool.push(transfer_data);
+        }
+    }
+}
+
+// 全局对象池实例
+lazy_static::lazy_static! {
+    pub static ref EVENT_METADATA_POOL: EventMetadataPool = EventMetadataPool::new();
+    pub static ref TRANSFER_DATA_POOL: TransferDataPool = TransferDataPool::new();
+}
 
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
@@ -57,6 +129,7 @@ pub enum EventType {
 }
 
 impl EventType {
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         match self {
             EventType::PumpSwapBuy => "PumpSwapBuy".to_string(),
@@ -167,6 +240,7 @@ pub struct EventMetadata {
 }
 
 impl EventMetadata {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         signature: String,
@@ -185,22 +259,73 @@ impl EventMetadata {
             slot,
             block_time,
             block_time_ms,
-            program_received_time_ms: program_received_time_ms,
+            program_received_time_ms,
             program_handle_time_consuming_ms: 0,
             protocol,
             event_type,
             program_id,
-            transfer_datas: vec![],
+            transfer_datas: Vec::with_capacity(4), // 预分配容量
             index,
         }
     }
+
+    /// 使用对象池创建EventMetadata
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_pool(
+        id: String,
+        signature: String,
+        slot: u64,
+        block_time: i64,
+        block_time_ms: i64,
+        protocol: ProtocolType,
+        event_type: EventType,
+        program_id: Pubkey,
+        index: String,
+        program_received_time_ms: i64,
+    ) -> Self {
+        // 尝试从对象池获取
+        if let Some(mut metadata) = EVENT_METADATA_POOL.acquire().await {
+            metadata.id = id;
+            metadata.signature = signature;
+            metadata.slot = slot;
+            metadata.block_time = block_time;
+            metadata.block_time_ms = block_time_ms;
+            metadata.program_received_time_ms = program_received_time_ms;
+            metadata.program_handle_time_consuming_ms = 0;
+            metadata.protocol = protocol;
+            metadata.event_type = event_type;
+            metadata.program_id = program_id;
+            metadata.index = index;
+            metadata.transfer_datas.clear();
+            return metadata;
+        }
+        
+        // 如果对象池为空，创建新的
+        Self::new(
+            id,
+            signature,
+            slot,
+            block_time,
+            block_time_ms,
+            protocol,
+            event_type,
+            program_id,
+            index,
+            program_received_time_ms,
+        )
+    }
+
     pub fn set_id(&mut self, id: String) {
-        let _id = format!("{}-{}-{}", self.signature, self.event_type.to_string(), id);
-        // 对传入的 id 进行哈希处理
-        let mut hasher = DefaultHasher::new();
-        _id.hash(&mut hasher);
-        let hash_value = hasher.finish();
-        self.id = format!("{:x}", hash_value);
+        self.id = id;
+    }
+
+    pub fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>) {
+        self.transfer_datas = transfer_datas;
+    }
+
+    /// 回收EventMetadata到对象池
+    pub async fn recycle(self) {
+        EVENT_METADATA_POOL.release(self).await;
     }
 }
 

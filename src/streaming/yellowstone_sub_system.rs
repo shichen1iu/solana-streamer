@@ -9,7 +9,8 @@ use solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction};
 use solana_transaction_status::EncodedTransactionWithStatusMeta;
 
 const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
-const CHANNEL_SIZE: usize = 1000;
+// 根据实际并发量调整通道大小，避免背压
+const CHANNEL_SIZE: usize = 5000;
 
 #[derive(Debug)]
 pub enum SystemEvent {
@@ -52,7 +53,7 @@ impl YellowstoneGrpc {
                         if let Err(e) =
                             Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
                         {
-                            error!("Error handling message: {:?}", e);
+                            error!("Error handling message: {e:?}");
                             break;
                         }
                     }
@@ -66,7 +67,7 @@ impl YellowstoneGrpc {
 
         while let Some(transaction_pretty) = rx.next().await {
             if let Err(e) = Self::process_system_transaction(transaction_pretty, &*callback).await {
-                error!("Error processing transaction: {:?}", e);
+                error!("Error processing transaction: {e:?}");
             }
         }
         Ok(())

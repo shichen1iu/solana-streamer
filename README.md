@@ -17,6 +17,9 @@ A lightweight Rust library for real-time event streaming from Solana DEX trading
 5. **Unified Event Interface**: Consistent event handling across all supported protocols
 6. **Event Parsing System**: Automatic parsing and categorization of protocol-specific events
 7. **High Performance**: Optimized for low-latency event processing
+8. **Batch Processing**: Efficient event batching to improve throughput and reduce overhead
+9. **Performance Monitoring**: Built-in performance metrics and monitoring capabilities
+10. **Memory Optimization**: Object pooling and caching to reduce memory allocations
 
 ## Installation
 
@@ -45,6 +48,8 @@ solana-streamer-sdk = "0.1.8"
 
 ## Usage Examples
 
+### Basic Usage with Performance Monitoring
+
 ```rust
 use solana_streamer_sdk::{
     match_event,
@@ -70,22 +75,30 @@ use solana_streamer_sdk::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting Solana Streamer...");
+    
+    // Test Yellowstone gRPC with performance monitoring
     test_grpc().await?;
+    
+    // Test ShredStream with performance monitoring  
     test_shreds().await?;
+    
     Ok(())
 }
 
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Subscribing to GRPC events...");
+    println!("Subscribing to Yellowstone gRPC events...");
 
-    let grpc = YellowstoneGrpc::new(
+    // Create gRPC client with performance monitoring enabled
+    let grpc = YellowstoneGrpc::new_with_config(
         "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
         None,
+        true, // enable performance monitoring
     )?;
 
     let callback = create_event_callback();
 
-    // Will try to parse corresponding protocol events from transactions
+    // Configure protocols to monitor
     let protocols = vec![
         Protocol::PumpFun,
         Protocol::PumpSwap,
@@ -94,19 +107,23 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumClmm,
     ];
 
-    // Filter accounts
+    // Configure account filtering
     let account_include = vec![
         PUMPFUN_PROGRAM_ID.to_string(),      // Listen to pumpfun program ID
         PUMPSWAP_PROGRAM_ID.to_string(),     // Listen to pumpswap program ID
         BONK_PROGRAM_ID.to_string(),         // Listen to bonk program ID
         RAYDIUM_CPMM_PROGRAM_ID.to_string(), // Listen to raydium_cpmm program ID
         RAYDIUM_CLMM_PROGRAM_ID.to_string(), // Listen to raydium_clmm program ID
-        "xxxxxxxx".to_string(),              // Listen to xxxxx account
     ];
     let account_exclude = vec![];
     let account_required = vec![];
 
     println!("Starting to listen for events, press Ctrl+C to stop...");
+    println!("Monitoring programs: {:?}", account_include);
+    
+    println!("Starting subscription...");
+    
+    // Subscribe with automatic performance monitoring
     grpc.subscribe_events_v2(
         protocols,
         None,
@@ -124,7 +141,11 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to ShredStream events...");
 
-    let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
+    // Create ShredStream client with performance monitoring enabled
+    let shred_stream = ShredStreamGrpc::new_with_config(
+        "http://127.0.0.1:10800".to_string(),
+        true, // enable performance monitoring
+    ).await?;
     let callback = create_event_callback();
     let protocols = vec![
         Protocol::PumpFun,
@@ -135,6 +156,8 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("Listening for events, press Ctrl+C to stop...");
+    
+    // Subscribe with automatic performance monitoring
     shred_stream
         .shredstream_subscribe(protocols, None, callback)
         .await?;
@@ -144,6 +167,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
+        println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // When using grpc, you can get block_time from each event
@@ -245,28 +269,134 @@ src/
 └── main.rs           # Example program
 ```
 
+## Performance Optimizations
+
+### Recent Performance Improvements
+
+The latest version includes significant performance optimizations that dramatically improve event processing throughput:
+
+#### 1. **Batch Processing System**
+- **Event Batching**: Events are now processed in batches (default: 100 events per batch) instead of individually
+- **Reduced Callback Overhead**: Batch processing reduces the number of callback invocations by up to 100x
+- **Improved Throughput**: Significantly higher event processing rates with lower CPU usage
+- **Configurable Batch Size**: Adjustable batch size to balance latency vs throughput
+
+#### 2. **Memory Optimization**
+- **Object Pooling**: `EventMetadataPool` and `TransferDataPool` reduce memory allocations
+- **Pre-allocated Vectors**: `Vec::with_capacity()` for collections to avoid dynamic resizing
+- **Reduced Cloning**: Minimized unnecessary data cloning operations
+- **Memory Usage Monitoring**: Real-time memory usage tracking in performance metrics
+
+#### 3. **Caching System**
+- **Event Parse Cache**: `EventParseCache` avoids redundant transaction parsing
+- **Cache Hit Rate Monitoring**: Track cache effectiveness in performance metrics
+- **Intelligent Cache Management**: Automatic cache size management
+
+#### 4. **Performance Monitoring**
+- **Real-time Metrics**: Built-in performance monitoring with automatic display
+- **Comprehensive Statistics**: Events/second, processing times, memory usage, cache hit rates
+- **Configurable Monitoring**: Enable/disable performance monitoring as needed
+- **Zero Overhead**: Monitoring can be completely disabled for maximum performance
+
+#### 5. **Concurrent Processing**
+- **Async Event Processing**: Non-blocking event handling with `tokio`
+- **Parallel Protocol Parsing**: Multiple protocols parsed concurrently
+- **Optimized Channel Sizes**: Increased channel capacity (5000) to handle high event volumes
+
+### Performance Metrics
+
+The built-in performance monitoring provides detailed insights:
+
+- **Events Processed**: Total number of events processed
+- **Events/Second**: Real-time processing rate (5-second rolling window)
+- **Average Processing Time**: Mean time to process events
+- **Min/Max Processing Time**: Fastest and slowest processing times
+- **Cache Hit Rate**: Percentage of cache hits for event parsing
+- **Memory Usage**: Estimated memory consumption
+
+### Configuration Options
+
+```rust
+// Performance monitoring configuration
+let grpc = YellowstoneGrpc::new_with_config(
+    endpoint,
+    x_token,
+    true,  // enable performance monitoring
+)?;
+
+// Batch processing is automatically enabled with optimal settings
+// Batch size: 100 events
+// Batch timeout: 10ms
+// Channel size: 5000
+```
+
 ## Performance Considerations
 
 1. **Connection Management**: Properly handle connection lifecycle and reconnection
 2. **Event Filtering**: Use protocol filtering to reduce unnecessary event processing
 3. **Memory Management**: Implement proper cleanup for long-running streams
 4. **Error Handling**: Robust error handling for network issues and service disruptions
+5. **Batch Processing**: Leverage batch processing for high-throughput scenarios
+6. **Performance Monitoring**: Use built-in metrics to optimize your application
 
 ## Configuration Options
 
 ### Yellowstone gRPC Configuration
 
 ```rust
+// Recommended: Create gRPC client with performance monitoring enabled
+let grpc = YellowstoneGrpc::new_with_config(
+    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
+    None,
+    true, // enable performance monitoring
+)?;
+
+// Alternative: Basic configuration (performance monitoring enabled by default)
 let grpc = YellowstoneGrpc::new(
     "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
-    None, // Custom configuration options
+    None,
+)?;
+
+// Maximum performance: Disable performance monitoring
+let grpc = YellowstoneGrpc::new_with_config(
+    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
+    None,
+    false, // disable performance monitoring
 )?;
 ```
 
 ### ShredStream Configuration
 
 ```rust
+// Recommended: Create ShredStream client with performance monitoring enabled
+let shred_stream = ShredStreamGrpc::new_with_config(
+    "http://127.0.0.1:10800".to_string(),
+    true, // enable performance monitoring
+).await?;
+
+// Alternative: Basic configuration (performance monitoring enabled by default)
 let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
+
+// Maximum performance: Disable performance monitoring
+let shred_stream = ShredStreamGrpc::new_with_config(
+    "http://127.0.0.1:10800".to_string(),
+    false, // disable performance monitoring
+).await?;
+```
+
+### Performance Tuning
+
+```rust
+// Runtime performance monitoring control
+grpc.set_enable_metrics(true).await;   // Enable monitoring
+grpc.set_enable_metrics(false).await;  // Disable monitoring
+
+// Get current performance metrics
+let metrics = grpc.get_metrics().await;
+println!("Current performance: {:?}", metrics);
+
+// Manual performance metrics display
+grpc.print_metrics().await;
 ```
 
 ## License

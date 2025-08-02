@@ -17,6 +17,9 @@
 5. **统一事件接口**: 在所有支持的协议中保持一致的事件处理
 6. **事件解析系统**: 自动解析和分类协议特定事件
 7. **高性能**: 针对低延迟事件处理进行优化
+8. **批处理优化**: 批量处理事件以减少回调开销
+9. **性能监控**: 内置性能指标监控，包括事件处理速度、内存使用等
+10. **内存优化**: 对象池和缓存机制减少内存分配
 
 ## 安装
 
@@ -76,11 +79,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
-    println!("正在订阅 GRPC 事件...");
+    println!("正在订阅 Yellowstone gRPC 事件...");
 
-    let grpc = YellowstoneGrpc::new(
+    // 创建 gRPC 客户端并启用性能监控
+    let grpc = YellowstoneGrpc::new_with_config(
         "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
         None,
+        true, // 启用性能监控
     )?;
 
     let callback = create_event_callback();
@@ -124,7 +129,11 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("正在订阅 ShredStream 事件...");
 
-    let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
+    // 创建 ShredStream 客户端并启用性能监控
+    let shred_stream = ShredStreamGrpc::new_with_config(
+        "http://127.0.0.1:10800".to_string(),
+        true, // 启用性能监控
+    ).await?;
     let callback = create_event_callback();
     let protocols = vec![
         Protocol::PumpFun,
@@ -251,22 +260,52 @@ src/
 2. **事件过滤**: 使用协议过滤减少不必要的事件处理
 3. **内存管理**: 为长时间运行的流实现适当的清理
 4. **错误处理**: 对网络问题和服务中断进行健壮的错误处理
+5. **批处理优化**: 使用批处理减少回调开销，提高吞吐量
+6. **性能监控**: 启用性能监控以识别瓶颈和优化机会
 
 ## 配置选项
 
 ### Yellowstone gRPC 配置
 
 ```rust
+// 推荐：创建 gRPC 客户端并启用性能监控
+let grpc = YellowstoneGrpc::new_with_config(
+    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
+    None,
+    true, // 启用性能监控
+)?;
+
+// 替代：基本配置（性能监控默认启用）
 let grpc = YellowstoneGrpc::new(
     "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
-    None, // 自定义配置选项
+    None,
+)?;
+
+// 最大性能：禁用性能监控
+let grpc = YellowstoneGrpc::new_with_config(
+    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
+    None,
+    false, // 禁用性能监控
 )?;
 ```
 
 ### ShredStream 配置
 
 ```rust
+// 推荐：创建 ShredStream 客户端并启用性能监控
+let shred_stream = ShredStreamGrpc::new_with_config(
+    "http://127.0.0.1:10800".to_string(),
+    true, // 启用性能监控
+).await?;
+
+// 替代：基本配置（性能监控默认启用）
 let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
+
+// 最大性能：禁用性能监控
+let shred_stream = ShredStreamGrpc::new_with_config(
+    "http://127.0.0.1:10800".to_string(),
+    false, // 禁用性能监控
+).await?;
 ```
 
 ## 许可证

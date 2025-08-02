@@ -20,6 +20,12 @@ pub struct BonkEventParser {
     inner: GenericEventParser,
 }
 
+impl Default for BonkEventParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BonkEventParser {
     pub fn new() -> Self {
         // 配置所有事件类型
@@ -73,9 +79,9 @@ impl BonkEventParser {
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Ok(event) = borsh::from_slice::<BonkPoolCreateEvent>(data) {
             let mut metadata = metadata;
-            metadata.set_id(format!("{}", metadata.signature,));
+            metadata.set_id(metadata.signature.to_string());
             Some(Box::new(BonkPoolCreateEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -93,7 +99,7 @@ impl BonkEventParser {
             metadata.set_id(format!(
                 "{}-{}",
                 metadata.signature,
-                event.pool_state.to_string()
+                event.pool_state
             ));
             if metadata.event_type == EventType::BonkBuyExactIn
                 || metadata.event_type == EventType::BonkBuyExactOut
@@ -101,15 +107,13 @@ impl BonkEventParser {
                 if event.trade_direction != TradeDirection::Buy {
                     return None;
                 }
-            } else if metadata.event_type == EventType::BonkSellExactIn
-                || metadata.event_type == EventType::BonkSellExactOut
-            {
-                if event.trade_direction != TradeDirection::Sell {
+            } else if (metadata.event_type == EventType::BonkSellExactIn
+                || metadata.event_type == EventType::BonkSellExactOut)
+                && event.trade_direction != TradeDirection::Sell {
                     return None;
                 }
-            }
             Some(Box::new(BonkTradeEvent {
-                metadata: metadata,
+                metadata,
                 ..event
             }))
         } else {
@@ -270,7 +274,7 @@ impl BonkEventParser {
         let vesting_param = Self::parse_vesting_params(data, &mut offset)?;
 
         let mut metadata = metadata;
-        metadata.set_id(format!("{}", metadata.signature));
+        metadata.set_id(metadata.signature.to_string());
 
         Some(Box::new(BonkPoolCreateEvent {
             metadata,

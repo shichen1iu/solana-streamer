@@ -22,18 +22,23 @@ use solana_streamer_sdk::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting Solana Streamer...");
     test_grpc().await?;
     test_shreds().await?;
     Ok(())
 }
 
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Subscribing to GRPC events...");
+    println!("Subscribing to Yellowstone gRPC events...");
 
-    let grpc = YellowstoneGrpc::new(
+    // enable_metrics 为 true 时，会打印性能指标
+    let grpc = YellowstoneGrpc::new_with_config(
         "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
         None,
+        true,
     )?;
+
+    println!("GRPC client created successfully");
 
     let callback = create_event_callback();
 
@@ -46,6 +51,8 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumClmm,
     ];
 
+    println!("Protocols to monitor: {:?}", protocols);
+
     // Filter accounts
     let account_include = vec![
         PUMPFUN_PROGRAM_ID.to_string(),      // Listen to pumpfun program ID
@@ -53,12 +60,15 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         BONK_PROGRAM_ID.to_string(),         // Listen to bonk program ID
         RAYDIUM_CPMM_PROGRAM_ID.to_string(), // Listen to raydium_cpmm program ID
         RAYDIUM_CLMM_PROGRAM_ID.to_string(), // Listen to raydium_clmm program ID
-        "xxxxxxxx".to_string(),              // Listen to xxxxx account
     ];
     let account_exclude = vec![];
     let account_required = vec![];
 
     println!("Starting to listen for events, press Ctrl+C to stop...");
+    println!("Monitoring programs: {:?}", account_include);
+    
+    println!("Starting subscription...");
+    
     grpc.subscribe_events_v2(
         protocols,
         None,
@@ -74,9 +84,14 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
-    println!("正在订阅 ShredStream 事件...");
+    println!("Subscribing to ShredStream events...");
 
-    let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
+    // enable_metrics 为 true 时，会打印性能指标
+    let shred_stream = ShredStreamGrpc::new_with_config(
+        "http://127.0.0.1:10800".to_string(),
+        true,
+    ).await?;
+
     let callback = create_event_callback();
     let protocols = vec![
         Protocol::PumpFun,
@@ -86,7 +101,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumClmm,
     ];
 
-    println!("开始监听事件，按 Ctrl+C 停止...");
+    println!("Listening for events, press Ctrl+C to stop...");
     shred_stream
         .shredstream_subscribe(protocols, None, callback)
         .await?;
@@ -96,6 +111,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
+        println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // 使用grpc的时候，可以从每个事件中获取到block_time
@@ -103,37 +119,37 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
-                println!("BonkTradeEvent: {:?}", e);
+                println!("BonkTradeEvent: {e:?}");
             },
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
-                println!("PumpFunTradeEvent: {:?}", e);
+                println!("PumpFunTradeEvent: {e:?}");
             },
             PumpFunCreateTokenEvent => |e: PumpFunCreateTokenEvent| {
-                println!("PumpFunCreateTokenEvent: {:?}", e);
+                println!("PumpFunCreateTokenEvent: {e:?}");
             },
             PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
-                println!("Buy event: {:?}", e);
+                println!("Buy event: {e:?}");
             },
             PumpSwapSellEvent => |e: PumpSwapSellEvent| {
-                println!("Sell event: {:?}", e);
+                println!("Sell event: {e:?}");
             },
             PumpSwapCreatePoolEvent => |e: PumpSwapCreatePoolEvent| {
-                println!("CreatePool event: {:?}", e);
+                println!("CreatePool event: {e:?}");
             },
             PumpSwapDepositEvent => |e: PumpSwapDepositEvent| {
-                println!("Deposit event: {:?}", e);
+                println!("Deposit event: {e:?}");
             },
             PumpSwapWithdrawEvent => |e: PumpSwapWithdrawEvent| {
-                println!("Withdraw event: {:?}", e);
+                println!("Withdraw event: {e:?}");
             },
             RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
-                println!("RaydiumCpmmSwapEvent: {:?}", e);
+                println!("RaydiumCpmmSwapEvent: {e:?}");
             },
             RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
-                println!("RaydiumClmmSwapEvent: {:?}", e);
+                println!("RaydiumClmmSwapEvent: {e:?}");
             },
             RaydiumClmmSwapV2Event => |e: RaydiumClmmSwapV2Event| {
-                println!("RaydiumClmmSwapV2Event: {:?}", e);
+                println!("RaydiumClmmSwapV2Event: {e:?}");
             }
         });
     }

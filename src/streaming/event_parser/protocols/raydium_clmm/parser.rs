@@ -17,6 +17,12 @@ pub struct RaydiumClmmEventParser {
     inner: GenericEventParser,
 }
 
+impl Default for RaydiumClmmEventParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RaydiumClmmEventParser {
     pub fn new() -> Self {
         // 配置所有事件类型
@@ -89,7 +95,6 @@ impl RaydiumClmmEventParser {
             token_program: accounts[8],
             tick_array: accounts[9],
             remaining_accounts: accounts[10..].to_vec(),
-            ..Default::default()
         }))
     }
 
@@ -133,7 +138,6 @@ impl RaydiumClmmEventParser {
             input_vault_mint: accounts[11],
             output_vault_mint: accounts[12],
             remaining_accounts: accounts[13..].to_vec(),
-            ..Default::default()
         }))
     }
 }
