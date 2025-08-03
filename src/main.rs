@@ -3,7 +3,10 @@ use solana_streamer_sdk::{
     streaming::{
         event_parser::{
             protocols::{
-                bonk::{parser::BONK_PROGRAM_ID, BonkPoolCreateEvent, BonkTradeEvent},
+                bonk::{
+                    parser::BONK_PROGRAM_ID, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent,
+                    BonkPoolCreateEvent, BonkTradeEvent,
+                },
                 pumpfun::{parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunTradeEvent},
                 pumpswap::{
                     parser::PUMPSWAP_PROGRAM_ID, PumpSwapBuyEvent, PumpSwapCreatePoolEvent,
@@ -66,9 +69,9 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting to listen for events, press Ctrl+C to stop...");
     println!("Monitoring programs: {:?}", account_include);
-    
+
     println!("Starting subscription...");
-    
+
     grpc.subscribe_events_v2(
         protocols,
         None,
@@ -87,10 +90,8 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to ShredStream events...");
 
     // enable_metrics 为 true 时，会打印性能指标
-    let shred_stream = ShredStreamGrpc::new_with_config(
-        "http://127.0.0.1:10800".to_string(),
-        true,
-    ).await?;
+    let shred_stream =
+        ShredStreamGrpc::new_with_config("http://127.0.0.1:10800".to_string(), true).await?;
 
     let callback = create_event_callback();
     let protocols = vec![
@@ -102,9 +103,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("Listening for events, press Ctrl+C to stop...");
-    shred_stream
-        .shredstream_subscribe(protocols, None, callback)
-        .await?;
+    shred_stream.shredstream_subscribe(protocols, None, callback).await?;
 
     Ok(())
 }
@@ -120,6 +119,12 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
                 println!("BonkTradeEvent: {e:?}");
+            },
+            BonkMigrateToAmmEvent => |e: BonkMigrateToAmmEvent| {
+                println!("BonkMigrateToAmmEvent: {e:?}");
+            },
+            BonkMigrateToCpswapEvent => |e: BonkMigrateToCpswapEvent| {
+                println!("BonkMigrateToCpswapEvent: {e:?}");
             },
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
                 println!("PumpFunTradeEvent: {e:?}");

@@ -1,13 +1,13 @@
+use crate::impl_unified_event;
+use crate::streaming::event_parser::common::EventMetadata;
 use crate::streaming::event_parser::protocols::bonk::types::{
     CurveParams, MintParams, PoolStatus, TradeDirection, VestingParams,
 };
-use crate::streaming::event_parser::common::EventMetadata;
-use crate::impl_unified_event;
 use borsh::BorshDeserialize;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 
-/// 买入事件
+/// Trade event
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
 pub struct BonkTradeEvent {
     #[borsh(skip)]
@@ -53,7 +53,7 @@ pub struct BonkTradeEvent {
     pub is_bot: bool,
 }
 
-// 使用宏生成UnifiedEvent实现，指定需要合并的字段
+// Macro to generate UnifiedEvent implementation, specifying the fields to be merged
 impl_unified_event!(
     BonkTradeEvent,
     pool_state,
@@ -73,7 +73,7 @@ impl_unified_event!(
     pool_status
 );
 
-/// 创建池事件
+/// Create pool event
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
 pub struct BonkPoolCreateEvent {
     #[borsh(skip)]
@@ -100,7 +100,7 @@ pub struct BonkPoolCreateEvent {
     pub platform_config: Pubkey,
 }
 
-// 使用宏生成UnifiedEvent实现，指定需要合并的字段
+// Macro to generate UnifiedEvent implementation, specifying the fields to be merged
 impl_unified_event!(
     BonkPoolCreateEvent,
     pool_state,
@@ -111,16 +111,138 @@ impl_unified_event!(
     vesting_param
 );
 
-/// 事件鉴别器常量
+/// Create pool event
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub struct BonkMigrateToAmmEvent {
+    #[borsh(skip)]
+    pub metadata: EventMetadata,
+    pub base_lot_size: u64,
+    pub quote_lot_size: u64,
+    pub market_vault_signer_nonce: u8,
+    #[borsh(skip)]
+    pub payer: Pubkey,
+    #[borsh(skip)]
+    pub base_mint: Pubkey,
+    #[borsh(skip)]
+    pub quote_mint: Pubkey,
+    #[borsh(skip)]
+    pub openbook_program: Pubkey,
+    #[borsh(skip)]
+    pub market: Pubkey,
+    #[borsh(skip)]
+    pub request_queue: Pubkey,
+    #[borsh(skip)]
+    pub event_queue: Pubkey,
+    #[borsh(skip)]
+    pub bids: Pubkey,
+    #[borsh(skip)]
+    pub asks: Pubkey,
+    #[borsh(skip)]
+    pub market_vault_signer: Pubkey,
+    #[borsh(skip)]
+    pub market_base_vault: Pubkey,
+    #[borsh(skip)]
+    pub market_quote_vault: Pubkey,
+    #[borsh(skip)]
+    pub amm_program: Pubkey,
+    #[borsh(skip)]
+    pub amm_pool: Pubkey,
+    #[borsh(skip)]
+    pub amm_authority: Pubkey,
+    #[borsh(skip)]
+    pub amm_open_orders: Pubkey,
+    #[borsh(skip)]
+    pub amm_lp_mint: Pubkey,
+    #[borsh(skip)]
+    pub amm_base_vault: Pubkey,
+    #[borsh(skip)]
+    pub amm_quote_vault: Pubkey,
+    #[borsh(skip)]
+    pub amm_target_orders: Pubkey,
+    #[borsh(skip)]
+    pub amm_config: Pubkey,
+    #[borsh(skip)]
+    pub amm_create_fee_destination: Pubkey,
+    #[borsh(skip)]
+    pub authority: Pubkey,
+    #[borsh(skip)]
+    pub pool_state: Pubkey,
+    #[borsh(skip)]
+    pub global_config: Pubkey,
+    #[borsh(skip)]
+    pub base_vault: Pubkey,
+    #[borsh(skip)]
+    pub quote_vault: Pubkey,
+    #[borsh(skip)]
+    pub pool_lp_token: Pubkey,
+    #[borsh(skip)]
+    pub spl_token_program: Pubkey,
+    #[borsh(skip)]
+    pub associated_token_program: Pubkey,
+    #[borsh(skip)]
+    pub system_program: Pubkey,
+    #[borsh(skip)]
+    pub rent_program: Pubkey,
+}
+
+// Macro to generate UnifiedEvent implementation, specifying the fields to be merged
+impl_unified_event!(
+    BonkMigrateToAmmEvent,
+    base_lot_size,
+    quote_lot_size,
+    market_vault_signer_nonce
+);
+
+// Migrate to CP Swap event
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub struct BonkMigrateToCpswapEvent {
+    pub metadata: EventMetadata,
+    pub payer: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub platform_config: Pubkey,
+    pub cpswap_program: Pubkey,
+    pub cpswap_pool: Pubkey,
+    pub cpswap_authority: Pubkey,
+    pub cpswap_lp_mint: Pubkey,
+    pub cpswap_base_vault: Pubkey,
+    pub cpswap_quote_vault: Pubkey,
+    pub cpswap_config: Pubkey,
+    pub cpswap_create_pool_fee: Pubkey,
+    pub cpswap_observation: Pubkey,
+    pub lock_program: Pubkey,
+    pub lock_authority: Pubkey,
+    pub lock_lp_vault: Pubkey,
+    pub authority: Pubkey,
+    pub pool_state: Pubkey,
+    pub global_config: Pubkey,
+    pub base_vault: Pubkey,
+    pub quote_vault: Pubkey,
+    pub pool_lp_token: Pubkey,
+    pub base_token_program: Pubkey,
+    pub quote_token_program: Pubkey,
+    pub associated_token_program: Pubkey,
+    pub system_program: Pubkey,
+    pub rent_program: Pubkey,
+    pub metadata_program: Pubkey,
+    pub remaining_accounts: Vec<Pubkey>,
+}
+
+// Macro to generate UnifiedEvent implementation, specifying the fields to be merged
+impl_unified_event!(BonkMigrateToCpswapEvent,);
+
+/// Event discriminator constants
 pub mod discriminators {
-    // 事件鉴别器
+    // Event discriminators
     pub const TRADE_EVENT: &str = "0xe445a52e51cb9a1dbddb7fd34ee661ee";
     pub const POOL_CREATE_EVENT: &str = "0xe445a52e51cb9a1d97d7e20976a173ae";
 
-    // 指令鉴别器
+    // Instruction discriminators
     pub const BUY_EXACT_IN: &[u8] = &[250, 234, 13, 123, 213, 156, 19, 236];
     pub const BUY_EXACT_OUT: &[u8] = &[24, 211, 116, 40, 105, 3, 153, 56];
     pub const SELL_EXACT_IN: &[u8] = &[149, 39, 222, 155, 211, 124, 152, 26];
     pub const SELL_EXACT_OUT: &[u8] = &[95, 200, 71, 34, 8, 9, 11, 166];
     pub const INITIALIZE: &[u8] = &[175, 175, 109, 31, 13, 152, 155, 237];
+    pub const MIGRATE_TO_AMM: &[u8] = &[207, 82, 192, 145, 254, 207, 145, 223];
+    pub const MIGRATE_TO_CP_SWAP: &[u8] = &[136, 92, 200, 103, 28, 218, 144, 140];
 }

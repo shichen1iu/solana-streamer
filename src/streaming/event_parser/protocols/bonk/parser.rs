@@ -6,16 +6,17 @@ use crate::streaming::event_parser::{
     common::{utils::*, EventMetadata, EventType, ProtocolType},
     core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
     protocols::bonk::{
-        discriminators, BonkPoolCreateEvent, BonkTradeEvent, ConstantCurve, CurveParams,
-        FixedCurve, LinearCurve, MintParams, TradeDirection, VestingParams,
+        discriminators, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent, BonkPoolCreateEvent,
+        BonkTradeEvent, ConstantCurve, CurveParams, FixedCurve, LinearCurve, MintParams,
+        TradeDirection, VestingParams,
     },
 };
 
-/// Bonk程序ID
+/// Bonk Program ID
 pub const BONK_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj");
 
-/// Bonk事件解析器
+/// Bonk Event Parser
 pub struct BonkEventParser {
     inner: GenericEventParser,
 }
@@ -28,7 +29,7 @@ impl Default for BonkEventParser {
 
 impl BonkEventParser {
     pub fn new() -> Self {
-        // 配置所有事件类型
+        // Configure all event types
         let configs = vec![
             GenericEventParseConfig {
                 inner_instruction_discriminator: discriminators::TRADE_EVENT,
@@ -65,6 +66,20 @@ impl BonkEventParser {
                 inner_instruction_parser: Self::parse_pool_create_inner_instruction,
                 instruction_parser: Self::parse_initialize_instruction,
             },
+            GenericEventParseConfig {
+                inner_instruction_discriminator: "",
+                instruction_discriminator: discriminators::MIGRATE_TO_AMM,
+                event_type: EventType::BonkMigrateToAmm,
+                inner_instruction_parser: Self::parse_migrate_to_amm_inner_instruction,
+                instruction_parser: Self::parse_migrate_to_amm_instruction,
+            },
+            GenericEventParseConfig {
+                inner_instruction_discriminator: "",
+                instruction_discriminator: discriminators::MIGRATE_TO_CP_SWAP,
+                event_type: EventType::BonkMigrateToCpswap,
+                inner_instruction_parser: Self::parse_migrate_to_cpswap_inner_instruction,
+                instruction_parser: Self::parse_migrate_to_cpswap_instruction,
+            },
         ];
 
         let inner = GenericEventParser::new(BONK_PROGRAM_ID, ProtocolType::Bonk, configs);
@@ -72,7 +87,7 @@ impl BonkEventParser {
         Self { inner }
     }
 
-    /// 解析创建池事件
+    /// Parse pool creation event
     fn parse_pool_create_inner_instruction(
         data: &[u8],
         metadata: EventMetadata,
@@ -80,27 +95,36 @@ impl BonkEventParser {
         if let Ok(event) = borsh::from_slice::<BonkPoolCreateEvent>(data) {
             let mut metadata = metadata;
             metadata.set_id(metadata.signature.to_string());
-            Some(Box::new(BonkPoolCreateEvent {
-                metadata,
-                ..event
-            }))
+            Some(Box::new(BonkPoolCreateEvent { metadata, ..event }))
         } else {
             None
         }
     }
 
-    /// 解析交易事件
+    /// Parse migrate to AMM event
+    fn parse_migrate_to_amm_inner_instruction(
+        _data: &[u8],
+        _metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
+        None
+    }
+
+    /// Parse migrate to CP Swap event
+    fn parse_migrate_to_cpswap_inner_instruction(
+        _data: &[u8],
+        _metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
+        None
+    }
+
+    /// Parse trade event
     fn parse_trade_inner_instruction(
         data: &[u8],
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Ok(event) = borsh::from_slice::<BonkTradeEvent>(data) {
             let mut metadata = metadata;
-            metadata.set_id(format!(
-                "{}-{}",
-                metadata.signature,
-                event.pool_state
-            ));
+            metadata.set_id(format!("{}-{}", metadata.signature, event.pool_state));
             if metadata.event_type == EventType::BonkBuyExactIn
                 || metadata.event_type == EventType::BonkBuyExactOut
             {
@@ -109,19 +133,17 @@ impl BonkEventParser {
                 }
             } else if (metadata.event_type == EventType::BonkSellExactIn
                 || metadata.event_type == EventType::BonkSellExactOut)
-                && event.trade_direction != TradeDirection::Sell {
-                    return None;
-                }
-            Some(Box::new(BonkTradeEvent {
-                metadata,
-                ..event
-            }))
+                && event.trade_direction != TradeDirection::Sell
+            {
+                return None;
+            }
+            Some(Box::new(BonkTradeEvent { metadata, ..event }))
         } else {
             None
         }
     }
 
-    /// 解析买入指令事件
+    /// Parse buy instruction event
     fn parse_buy_exact_in_instruction(
         data: &[u8],
         accounts: &[Pubkey],
@@ -258,7 +280,7 @@ impl BonkEventParser {
         }))
     }
 
-    /// 解析初始化事件
+    /// Parse initialize event
     fn parse_initialize_instruction(
         data: &[u8],
         accounts: &[Pubkey],
@@ -294,13 +316,13 @@ impl BonkEventParser {
         }))
     }
 
-    /// 解析 MintParams 结构
+    /// Parse MintParams structure
     fn parse_mint_params(data: &[u8], offset: &mut usize) -> Option<MintParams> {
-        // 读取decimals (1字节)
+        // Read decimals (1 byte)
         let decimals = read_u8(data, *offset)?;
         *offset += 1;
 
-        // 读取name字符串长度和内容
+        // Read name string length and content
         let name_len = read_u32_le(data, *offset)? as usize;
         *offset += 4;
         if data.len() < *offset + name_len {
@@ -309,7 +331,7 @@ impl BonkEventParser {
         let name = String::from_utf8(data[*offset..*offset + name_len].to_vec()).ok()?;
         *offset += name_len;
 
-        // 读取symbol字符串长度和内容
+        // Read symbol string length and content
         let symbol_len = read_u32_le(data, *offset)? as usize;
         *offset += 4;
         if data.len() < *offset + symbol_len {
@@ -318,7 +340,7 @@ impl BonkEventParser {
         let symbol = String::from_utf8(data[*offset..*offset + symbol_len].to_vec()).ok()?;
         *offset += symbol_len;
 
-        // 读取uri字符串长度和内容
+        // Read uri string length and content
         let uri_len = read_u32_le(data, *offset)? as usize;
         *offset += 4;
         if data.len() < *offset + uri_len {
@@ -327,17 +349,12 @@ impl BonkEventParser {
         let uri = String::from_utf8(data[*offset..*offset + uri_len].to_vec()).ok()?;
         *offset += uri_len;
 
-        Some(MintParams {
-            decimals,
-            name,
-            symbol,
-            uri,
-        })
+        Some(MintParams { decimals, name, symbol, uri })
     }
 
-    /// 解析 CurveParams 结构
+    /// Parse CurveParams structure
     fn parse_curve_params(data: &[u8], offset: &mut usize) -> Option<CurveParams> {
-        // 读取curve类型标识符 (1字节)
+        // Read curve type identifier (1 byte)
         let curve_type = read_u8(data, *offset)?;
         *offset += 1;
 
@@ -372,11 +389,7 @@ impl BonkEventParser {
                 *offset += 1;
 
                 Some(CurveParams::Fixed {
-                    data: FixedCurve {
-                        supply,
-                        total_quote_fund_raising,
-                        migrate_type,
-                    },
+                    data: FixedCurve { supply, total_quote_fund_raising, migrate_type },
                 })
             }
             2 => {
@@ -389,18 +402,14 @@ impl BonkEventParser {
                 *offset += 1;
 
                 Some(CurveParams::Linear {
-                    data: LinearCurve {
-                        supply,
-                        total_quote_fund_raising,
-                        migrate_type,
-                    },
+                    data: LinearCurve { supply, total_quote_fund_raising, migrate_type },
                 })
             }
             _ => None,
         }
     }
 
-    /// 解析 VestingParams 结构
+    /// Parse VestingParams structure
     fn parse_vesting_params(data: &[u8], offset: &mut usize) -> Option<VestingParams> {
         let total_locked_amount = read_u64_le(data, *offset)?;
         *offset += 8;
@@ -409,11 +418,109 @@ impl BonkEventParser {
         let unlock_period = read_u64_le(data, *offset)?;
         *offset += 8;
 
-        Some(VestingParams {
-            total_locked_amount,
-            cliff_period,
-            unlock_period,
-        })
+        Some(VestingParams { total_locked_amount, cliff_period, unlock_period })
+    }
+
+    /// Parse migrate to AMM event
+    fn parse_migrate_to_amm_instruction(
+        data: &[u8],
+        accounts: &[Pubkey],
+        metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
+        if data.len() < 16 {
+            return None;
+        }
+
+        let base_lot_size = u64::from_le_bytes(data[0..8].try_into().unwrap());
+        let quote_lot_size = u64::from_le_bytes(data[8..16].try_into().unwrap());
+        let market_vault_signer_nonce = data[16];
+
+        let mut metadata = metadata;
+        metadata.set_id(metadata.signature.to_string());
+
+        Some(Box::new(BonkMigrateToAmmEvent {
+            metadata,
+            base_lot_size,
+            quote_lot_size,
+            market_vault_signer_nonce,
+            payer: accounts[0],
+            base_mint: accounts[1],
+            quote_mint: accounts[2],
+            openbook_program: accounts[3],
+            market: accounts[4],
+            request_queue: accounts[5],
+            event_queue: accounts[6],
+            bids: accounts[7],
+            asks: accounts[8],
+            market_vault_signer: accounts[9],
+            market_base_vault: accounts[10],
+            market_quote_vault: accounts[11],
+            amm_program: accounts[12],
+            amm_pool: accounts[13],
+            amm_authority: accounts[14],
+            amm_open_orders: accounts[15],
+            amm_lp_mint: accounts[16],
+            amm_base_vault: accounts[17],
+            amm_quote_vault: accounts[18],
+            amm_target_orders: accounts[19],
+            amm_config: accounts[20],
+            amm_create_fee_destination: accounts[21],
+            authority: accounts[22],
+            pool_state: accounts[23],
+            global_config: accounts[24],
+            base_vault: accounts[25],
+            quote_vault: accounts[26],
+            pool_lp_token: accounts[27],
+            spl_token_program: accounts[28],
+            associated_token_program: accounts[29],
+            system_program: accounts[30],
+            rent_program: accounts[31],
+            ..Default::default()
+        }))
+    }
+
+    /// Parse migrate to CP Swap event
+    fn parse_migrate_to_cpswap_instruction(
+        _data: &[u8],
+        accounts: &[Pubkey],
+        metadata: EventMetadata,
+    ) -> Option<Box<dyn UnifiedEvent>> {
+        let mut metadata = metadata;
+        metadata.set_id(metadata.signature.to_string());
+
+        Some(Box::new(BonkMigrateToCpswapEvent {
+            metadata,
+            payer: accounts[0],
+            base_mint: accounts[1],
+            quote_mint: accounts[2],
+            platform_config: accounts[3],
+            cpswap_program: accounts[4],
+            cpswap_pool: accounts[5],
+            cpswap_authority: accounts[6],
+            cpswap_lp_mint: accounts[7],
+            cpswap_base_vault: accounts[8],
+            cpswap_quote_vault: accounts[9],
+            cpswap_config: accounts[10],
+            cpswap_create_pool_fee: accounts[11],
+            cpswap_observation: accounts[12],
+            lock_program: accounts[13],
+            lock_authority: accounts[14],
+            lock_lp_vault: accounts[15],
+            authority: accounts[16],
+            pool_state: accounts[17],
+            global_config: accounts[18],
+            base_vault: accounts[19],
+            quote_vault: accounts[20],
+            pool_lp_token: accounts[21],
+            base_token_program: accounts[22],
+            quote_token_program: accounts[23],
+            associated_token_program: accounts[24],
+            system_program: accounts[25],
+            rent_program: accounts[26],
+            metadata_program: accounts[27],
+            remaining_accounts: accounts[28..].to_vec(),
+            ..Default::default()
+        }))
     }
 }
 

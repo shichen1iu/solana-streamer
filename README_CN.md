@@ -36,14 +36,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.8" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.9" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = "0.1.8"
+solana-streamer-sdk = "0.1.9"
 ```
 
 ## 使用示例
@@ -161,6 +161,12 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
                 println!("BonkTradeEvent: {:?}", e);
+            },
+            BonkMigrateToAmmEvent => |e: BonkMigrateToAmmEvent| {
+                println!("BonkMigrateToAmmEvent: {e:?}");
+            },
+            BonkMigrateToCpswapEvent => |e: BonkMigrateToCpswapEvent| {
+                println!("BonkMigrateToCpswapEvent: {e:?}");
             },
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
                 println!("PumpFunTradeEvent: {:?}", e);

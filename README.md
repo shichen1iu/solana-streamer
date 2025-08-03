@@ -36,14 +36,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.8" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.9" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = "0.1.8"
+solana-streamer-sdk = "0.1.9"
 ```
 
 ## Usage Examples
@@ -176,6 +176,12 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
                 println!("BonkTradeEvent: {:?}", e);
+            },
+            BonkMigrateToAmmEvent => |e: BonkMigrateToAmmEvent| {
+                println!("BonkMigrateToAmmEvent: {e:?}");
+            },
+            BonkMigrateToCpswapEvent => |e: BonkMigrateToCpswapEvent| {
+                println!("BonkMigrateToCpswapEvent: {e:?}");
             },
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
                 println!("PumpFunTradeEvent: {:?}", e);

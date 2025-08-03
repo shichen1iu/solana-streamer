@@ -5,11 +5,11 @@ use solana_transaction_status::UiInstruction;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// 对象池大小配置
+// Object pool size configuration
 const EVENT_METADATA_POOL_SIZE: usize = 1000;
 const TRANSFER_DATA_POOL_SIZE: usize = 2000;
 
-/// 事件元数据对象池
+/// Event metadata object pool
 pub struct EventMetadataPool {
     pool: Arc<Mutex<Vec<EventMetadata>>>,
 }
@@ -40,7 +40,7 @@ impl EventMetadataPool {
     }
 }
 
-/// 传输数据对象池
+/// Transfer data object pool
 pub struct TransferDataPool {
     pool: Arc<Mutex<Vec<TransferData>>>,
 }
@@ -71,7 +71,7 @@ impl TransferDataPool {
     }
 }
 
-// 全局对象池实例
+// Global object pool instances
 lazy_static::lazy_static! {
     pub static ref EVENT_METADATA_POOL: EventMetadataPool = EventMetadataPool::new();
     pub static ref TRANSFER_DATA_POOL: TransferDataPool = TransferDataPool::new();
@@ -90,12 +90,12 @@ pub enum ProtocolType {
     SDKSystem,
 }
 
-/// 事件类型枚举
+/// Event type enumeration
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum EventType {
-    // PumpSwap 事件
+    // PumpSwap events
     #[default]
     PumpSwapBuy,
     PumpSwapSell,
@@ -103,27 +103,29 @@ pub enum EventType {
     PumpSwapDeposit,
     PumpSwapWithdraw,
 
-    // PumpFun 事件
+    // PumpFun events
     PumpFunCreateToken,
     PumpFunBuy,
     PumpFunSell,
 
-    // Bonk 事件
+    // Bonk events
     BonkBuyExactIn,
     BonkBuyExactOut,
     BonkSellExactIn,
     BonkSellExactOut,
     BonkInitialize,
+    BonkMigrateToAmm,
+    BonkMigrateToCpswap,
 
-    // Raydium CPMM 事件
+    // Raydium CPMM events
     RaydiumCpmmSwapBaseInput,
     RaydiumCpmmSwapBaseOutput,
 
-    // Raydium CLMM 事件
+    // Raydium CLMM events
     RaydiumClmmSwap,
     RaydiumClmmSwapV2,
 
-    // 通用事件
+    // Common events
     SDKSystem,
     Unknown,
 }
@@ -145,6 +147,8 @@ impl EventType {
             EventType::BonkSellExactIn => "BonkSellExactIn".to_string(),
             EventType::BonkSellExactOut => "BonkSellExactOut".to_string(),
             EventType::BonkInitialize => "BonkInitialize".to_string(),
+            EventType::BonkMigrateToAmm => "BonkMigrateToAmm".to_string(),
+            EventType::BonkMigrateToCpswap => "BonkMigrateToCpswap".to_string(),
             EventType::RaydiumCpmmSwapBaseInput => "RaydiumCpmmSwapBaseInput".to_string(),
             EventType::RaydiumCpmmSwapBaseOutput => "RaydiumCpmmSwapBaseOutput".to_string(),
             EventType::RaydiumClmmSwap => "RaydiumClmmSwap".to_string(),
@@ -155,7 +159,7 @@ impl EventType {
     }
 }
 
-/// 解析结果
+/// Parse result
 #[derive(Debug, Clone)]
 pub struct ParseResult<T> {
     pub success: bool,
@@ -189,7 +193,7 @@ impl<T> ParseResult<T> {
     }
 }
 
-/// 协议信息
+/// Protocol information
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtocolInfo {
     pub name: String,
@@ -206,7 +210,7 @@ impl ProtocolInfo {
     }
 }
 
-/// 交易数据
+/// Transfer data
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
@@ -220,7 +224,7 @@ pub struct TransferData {
     pub mint: Option<Pubkey>,
 }
 
-/// 事件元数据
+/// Event metadata
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
@@ -264,12 +268,12 @@ impl EventMetadata {
             protocol,
             event_type,
             program_id,
-            transfer_datas: Vec::with_capacity(4), // 预分配容量
+            transfer_datas: Vec::with_capacity(4), // Pre-allocate capacity
             index,
         }
     }
 
-    /// 使用对象池创建EventMetadata
+    /// Create EventMetadata using object pool
     #[allow(clippy::too_many_arguments)]
     pub async fn new_with_pool(
         id: String,
@@ -283,7 +287,7 @@ impl EventMetadata {
         index: String,
         program_received_time_ms: i64,
     ) -> Self {
-        // 尝试从对象池获取
+        // Try to get from object pool
         if let Some(mut metadata) = EVENT_METADATA_POOL.acquire().await {
             metadata.id = id;
             metadata.signature = signature;
@@ -300,7 +304,7 @@ impl EventMetadata {
             return metadata;
         }
         
-        // 如果对象池为空，创建新的
+        // If object pool is empty, create new one
         Self::new(
             id,
             signature,
@@ -323,13 +327,13 @@ impl EventMetadata {
         self.transfer_datas = transfer_datas;
     }
 
-    /// 回收EventMetadata到对象池
+    /// Recycle EventMetadata to object pool
     pub async fn recycle(self) {
         EVENT_METADATA_POOL.release(self).await;
     }
 }
 
-/// 解析接下来指令中的token转账数据
+/// Parse token transfer data from next instructions
 pub fn parse_transfer_datas_from_next_instructions(
     inner_instruction: &solana_transaction_status::UiInnerInstructions,
     current_index: i8,
@@ -355,7 +359,7 @@ pub fn parse_transfer_datas_from_next_instructions(
         return vec![];
     }
     let mut transfer_datas = vec![];
-    // 获取当前指令之后的两个指令
+    // Get the next two instructions after the current instruction
     let next_instructions: Vec<&UiInstruction> = inner_instruction
         .instructions
         .iter()
