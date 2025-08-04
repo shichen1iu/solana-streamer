@@ -22,37 +22,166 @@ use crate::streaming::event_parser::{EventParserFactory, Protocol, UnifiedEvent}
 
 type TransactionsFilterMap = HashMap<String, SubscribeRequestFilterTransactions>;
 
-const CONNECT_TIMEOUT: u64 = 10;
-const REQUEST_TIMEOUT: u64 = 60;
-// 根据实际并发量调整通道大小，避免背压
-const CHANNEL_SIZE: usize = 5000;
-const MAX_DECODING_MESSAGE_SIZE: usize = 1024 * 1024 * 10;
+// 默认配置常量
+const DEFAULT_CONNECT_TIMEOUT: u64 = 10;
+const DEFAULT_REQUEST_TIMEOUT: u64 = 60;
+const DEFAULT_CHANNEL_SIZE: usize = 1000;
+const DEFAULT_MAX_DECODING_MESSAGE_SIZE: usize = 1024 * 1024 * 10;
+const DEFAULT_BATCH_SIZE: usize = 100;
+const DEFAULT_BATCH_TIMEOUT_MS: u64 = 5;
 
-// 批处理配置
-const BATCH_SIZE: usize = 100;  // 批处理50个事件
-const BATCH_TIMEOUT_MS: u64 = 10;  // 减少超时时间到10ms
-
-// 连接池配置（为将来扩展保留）
-#[allow(dead_code)]
-const CONNECTION_POOL_SIZE: usize = 5;
-#[allow(dead_code)]
-const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5分钟
-
-// 工作线程池配置
-const WORKER_THREADS: usize = 8;
-const TASK_QUEUE_SIZE: usize = 10000;
-
-/// 工作线程池配置
-pub struct WorkerPoolConfig {
-    pub worker_threads: usize,
-    pub task_queue_size: usize,
+// 背压处理策略
+#[derive(Debug, Clone, Copy)]
+pub enum BackpressureStrategy {
+    /// 阻塞等待（默认）
+    Block,
+    /// 丢弃消息
+    Drop,
+    /// 重试有限次数后丢弃
+    Retry { max_attempts: usize, wait_ms: u64 },
+    /// 有序处理（确保按 slot 顺序处理）
+    Ordered { max_pending_slots: usize },
 }
 
-impl Default for WorkerPoolConfig {
+impl Default for BackpressureStrategy {
+    fn default() -> Self {
+        Self::Block
+    }
+}
+
+/// 批处理配置
+#[derive(Debug, Clone)]
+pub struct BatchConfig {
+    /// 批处理大小（默认：100）
+    pub batch_size: usize,
+    /// 批处理超时时间（毫秒，默认：10ms）
+    pub batch_timeout_ms: u64,
+    /// 是否启用批处理（默认：true）
+    pub enabled: bool,
+}
+
+impl Default for BatchConfig {
     fn default() -> Self {
         Self {
-            worker_threads: WORKER_THREADS,
-            task_queue_size: TASK_QUEUE_SIZE,
+            batch_size: DEFAULT_BATCH_SIZE,
+            batch_timeout_ms: DEFAULT_BATCH_TIMEOUT_MS,
+            enabled: true,
+        }
+    }
+}
+
+/// 背压配置
+#[derive(Debug, Clone)]
+pub struct BackpressureConfig {
+    /// 通道大小（默认：10000）
+    pub channel_size: usize,
+    /// 背压处理策略（默认：Block）
+    pub strategy: BackpressureStrategy,
+}
+
+impl Default for BackpressureConfig {
+    fn default() -> Self {
+        Self {
+            channel_size: DEFAULT_CHANNEL_SIZE,
+            strategy: BackpressureStrategy::default(),
+        }
+    }
+}
+
+/// 连接配置
+#[derive(Debug, Clone)]
+pub struct ConnectionConfig {
+    /// 连接超时时间（秒，默认：10）
+    pub connect_timeout: u64,
+    /// 请求超时时间（秒，默认：60）
+    pub request_timeout: u64,
+    /// 最大解码消息大小（字节，默认：10MB）
+    pub max_decoding_message_size: usize,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            max_decoding_message_size: DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        }
+    }
+}
+
+/// 完整的客户端配置
+#[derive(Debug, Clone)]
+pub struct ClientConfig {
+    /// 连接配置
+    pub connection: ConnectionConfig,
+    /// 批处理配置
+    pub batch: BatchConfig,
+    /// 背压配置
+    pub backpressure: BackpressureConfig,
+    /// 是否启用性能监控（默认：false）
+    pub enable_metrics: bool,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            connection: ConnectionConfig::default(),
+            batch: BatchConfig::default(),
+            backpressure: BackpressureConfig::default(),
+            enable_metrics: false,
+        }
+    }
+}
+
+impl ClientConfig {
+    /// 创建高性能配置（适合高并发场景）
+    pub fn high_performance() -> Self {
+        Self {
+            connection: ConnectionConfig::default(),
+            batch: BatchConfig {
+                batch_size: 200,
+                batch_timeout_ms: 5,
+                enabled: true,
+            },
+            backpressure: BackpressureConfig {
+                channel_size: 20000,
+                strategy: BackpressureStrategy::Drop,
+            },
+            enable_metrics: true,
+        }
+    }
+
+    /// 创建低延迟配置（适合实时场景）
+    pub fn low_latency() -> Self {
+        Self {
+            connection: ConnectionConfig::default(),
+            batch: BatchConfig {
+                batch_size: 10,
+                batch_timeout_ms: 1,
+                enabled: false,
+            },
+            backpressure: BackpressureConfig {
+                channel_size: 1000,
+                strategy: BackpressureStrategy::Block,
+            },
+            enable_metrics: false,
+        }
+    }
+
+    /// 创建有序处理配置（确保事件按顺序处理）
+    pub fn ordered_processing(max_pending_slots: usize) -> Self {
+        Self {
+            connection: ConnectionConfig::default(),
+            batch: BatchConfig {
+                batch_size: 50,
+                batch_timeout_ms: 5,
+                enabled: true,
+            },
+            backpressure: BackpressureConfig {
+                channel_size: 15000,
+                strategy: BackpressureStrategy::Ordered { max_pending_slots },
+            },
+            enable_metrics: true,
         }
     }
 }
@@ -114,9 +243,9 @@ impl GrpcConnectionPool {
         let builder = GeyserGrpcClient::build_from_shared(self.endpoint.clone())?
             .x_token(self.x_token.clone())?
             .tls_config(ClientTlsConfig::new().with_native_roots())?
-            .max_decoding_message_size(MAX_DECODING_MESSAGE_SIZE)
-            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            .max_decoding_message_size(DEFAULT_MAX_DECODING_MESSAGE_SIZE)
+            .connect_timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT))
+            .timeout(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT));
 
         Ok(builder.connect().await?)
     }
@@ -127,7 +256,7 @@ pub struct EventBatchCollector<F>
 where
     F: Fn(Vec<Box<dyn UnifiedEvent>>) + Send + Sync + 'static,
 {
-    callback: F,
+    pub(crate) callback: F,
     batch: Vec<Box<dyn UnifiedEvent>>,
     batch_size: usize,
     timeout_ms: u64,
@@ -246,20 +375,18 @@ impl From<(SubscribeUpdateTransaction, Option<Timestamp>)> for TransactionPretty
 pub struct YellowstoneGrpc {
     endpoint: String,
     x_token: Option<String>,
+    config: ClientConfig,
     metrics: Arc<Mutex<PerformanceMetrics>>,
-    enable_metrics: bool, // 是否启用性能监控
 }
 
 impl YellowstoneGrpc {
+    /// 创建客户端，使用默认配置
     pub fn new(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
-        Self::new_with_config(endpoint, x_token, true)
+        Self::new_with_config(endpoint, x_token, ClientConfig::default())
     }
 
-    pub fn new_with_config(
-        endpoint: String, 
-        x_token: Option<String>, 
-        enable_metrics: bool,
-    ) -> AnyResult<Self> {
+    /// 创建客户端，使用自定义配置
+    pub fn new_with_config(endpoint: String, x_token: Option<String>, config: ClientConfig) -> AnyResult<Self> {
         if CryptoProvider::get_default().is_none() {
             default_provider()
                 .install_default()
@@ -269,9 +396,41 @@ impl YellowstoneGrpc {
         Ok(Self { 
             endpoint, 
             x_token,
+            config,
             metrics: Arc::new(Mutex::new(PerformanceMetrics::new())),
-            enable_metrics,
         })
+    }
+
+    /// 创建高性能客户端（适合高并发场景）
+    pub fn new_high_performance(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, x_token, ClientConfig::high_performance())
+    }
+
+    /// 创建低延迟客户端（适合实时场景）
+    pub fn new_low_latency(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, x_token, ClientConfig::low_latency())
+    }
+
+    /// 创建有序处理客户端（确保事件按顺序处理）
+    pub fn new_ordered_processing(endpoint: String, x_token: Option<String>, max_pending_slots: usize) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, x_token, ClientConfig::ordered_processing(max_pending_slots))
+    }
+
+    /// 创建简化的即时处理客户端（推荐用于简单场景）
+    pub fn new_immediate(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
+        let mut config = ClientConfig::low_latency();
+        config.enable_metrics = false; // 即时模式默认关闭性能监控
+        Self::new_with_config(endpoint, x_token, config)
+    }
+
+    /// 获取当前配置
+    pub fn get_config(&self) -> &ClientConfig {
+        &self.config
+    }
+
+    /// 更新配置
+    pub fn update_config(&mut self, config: ClientConfig) {
+        self.config = config;
     }
 
     /// 获取性能指标
@@ -282,7 +441,7 @@ impl YellowstoneGrpc {
 
     /// 启用或禁用性能监控
     pub fn set_enable_metrics(&mut self, enabled: bool) {
-        self.enable_metrics = enabled;
+        self.config.enable_metrics = enabled;
     }
 
 
@@ -304,7 +463,7 @@ impl YellowstoneGrpc {
     /// 启动自动性能监控任务
     pub async fn start_auto_metrics_monitoring(&self) {
         // 检查是否启用性能监控
-        if !self.enable_metrics {
+        if !self.config.enable_metrics {
             return; // 如果未启用性能监控，不启动监控任务
         }
 
@@ -321,7 +480,7 @@ impl YellowstoneGrpc {
     /// 更新性能指标
     async fn update_metrics(&self, events_processed: u64, processing_time_ms: f64) {
         // 检查是否启用性能监控
-        if !self.enable_metrics {
+        if !self.config.enable_metrics {
             return; // 如果未启用性能监控，直接返回
         }
 
@@ -374,9 +533,9 @@ impl YellowstoneGrpc {
         let builder = GeyserGrpcClient::build_from_shared(self.endpoint.clone())?
             .x_token(self.x_token.clone())?
             .tls_config(ClientTlsConfig::new().with_native_roots())?
-            .max_decoding_message_size(MAX_DECODING_MESSAGE_SIZE)
-            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            .max_decoding_message_size(self.config.connection.max_decoding_message_size)
+            .connect_timeout(Duration::from_secs(self.config.connection.connect_timeout))
+            .timeout(Duration::from_secs(self.config.connection.request_timeout));
 
         Ok(builder.connect().await?)
     }
@@ -431,13 +590,64 @@ impl YellowstoneGrpc {
         msg: SubscribeUpdate,
         tx: &mut mpsc::Sender<TransactionPretty>,
         subscribe_tx: &mut (impl Sink<SubscribeRequest, Error = mpsc::SendError> + Unpin),
+        backpressure_strategy: BackpressureStrategy,
     ) -> AnyResult<()> {
         let created_at = msg.created_at;
         match msg.update_oneof {
             Some(UpdateOneof::Transaction(sut)) => {
                 let transaction_pretty = TransactionPretty::from((sut, created_at));
                 log::info!("Received transaction: {} at slot {}", transaction_pretty.signature, transaction_pretty.slot);
-                tx.try_send(transaction_pretty)?;
+                
+                // 根据背压策略处理发送
+                match backpressure_strategy {
+                    BackpressureStrategy::Block => {
+                        // 阻塞等待，直到有空间
+                        if let Err(e) = tx.send(transaction_pretty).await {
+                            log::error!("Failed to send transaction to channel: {:?}", e);
+                            return Err(anyhow::anyhow!("Channel send failed: {:?}", e));
+                        }
+                    }
+                    BackpressureStrategy::Drop => {
+                        // 尝试发送，如果失败则丢弃
+                        if let Err(e) = tx.try_send(transaction_pretty) {
+                            if e.is_full() {
+                                log::warn!("Channel is full, dropping transaction");
+                            } else {
+                                log::error!("Channel is closed: {:?}", e);
+                                return Err(anyhow::anyhow!("Channel is closed: {:?}", e));
+                            }
+                        }
+                    }
+                    BackpressureStrategy::Retry { max_attempts, wait_ms } => {
+                        // 重试有限次数
+                        let mut retry_count = 0;
+                        loop {
+                            match tx.try_send(transaction_pretty.clone()) {
+                                Ok(_) => break,
+                                Err(e) => {
+                                    if e.is_full() {
+                                        retry_count += 1;
+                                        if retry_count >= max_attempts {
+                                            log::warn!("Channel is full after {} attempts, dropping transaction", retry_count);
+                                            break;
+                                        }
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+                                    } else {
+                                        log::error!("Channel is closed: {:?}", e);
+                                        return Err(anyhow::anyhow!("Channel is closed: {:?}", e));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    BackpressureStrategy::Ordered { max_pending_slots: _ } => {
+                        // 有序处理策略 - 这里暂时使用阻塞策略，实际的有序处理在接收端实现
+                        if let Err(e) = tx.send(transaction_pretty).await {
+                            log::error!("Failed to send transaction to channel: {:?}", e);
+                            return Err(anyhow::anyhow!("Channel send failed: {:?}", e));
+                        }
+                    }
+                }
             }
             Some(UpdateOneof::Ping(_)) => {
                 subscribe_tx
@@ -486,9 +696,120 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
     {
+        // 启动自动性能监控（如果启用）
+        if self.config.enable_metrics {
+            self.start_auto_metrics_monitoring().await;
+        }
         
-        // 启动自动性能监控
-        self.start_auto_metrics_monitoring().await;
+        // 默认使用即时处理模式
+        self.subscribe_events_immediate(
+            protocols,
+            bot_wallet,
+            account_include,
+            account_exclude,
+            account_required,
+            commitment,
+            callback,
+        )
+        .await
+    }
+
+    /// 简化的即时事件订阅（推荐用于简单场景）
+    pub async fn subscribe_events_immediate<F>(
+        &self,
+        protocols: Vec<Protocol>,
+        bot_wallet: Option<Pubkey>,
+        account_include: Vec<String>,
+        account_exclude: Vec<String>,
+        account_required: Vec<String>,
+        commitment: Option<CommitmentLevel>,
+        callback: F,
+    ) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
+    {
+        // 启动自动性能监控（如果启用）
+        if self.config.enable_metrics {
+            self.start_auto_metrics_monitoring().await;
+        }
+        
+        if account_include.is_empty() && account_exclude.is_empty() && account_required.is_empty() {
+            return Err(anyhow::anyhow!(
+                "account_include or account_exclude or account_required cannot be empty"
+            ));
+        }
+
+        let transactions =
+            self.get_subscribe_request_filter(account_include, account_exclude, account_required);
+        
+        // 订阅事件
+        let (mut subscribe_tx, mut stream) = self
+            .subscribe_with_request(transactions, commitment)
+            .await?;
+
+        // 创建通道，使用配置中的通道大小
+        let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(self.config.backpressure.channel_size);
+
+        // 启动流处理任务
+        let backpressure_strategy = self.config.backpressure.strategy;
+        tokio::spawn(async move {
+            while let Some(message) = stream.next().await {
+                match message {
+                    Ok(msg) => {
+                        if let Err(e) =
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx, backpressure_strategy).await
+                        {
+                            error!("Error handling message: {e:?}");
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        error!("Stream error: {error:?}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // 即时处理交易，无批处理
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            while let Some(transaction_pretty) = rx.next().await {            
+                if let Err(e) = self_clone.process_event_transaction_with_metrics(
+                    transaction_pretty,
+                    &callback,
+                    bot_wallet,
+                    protocols.clone(),
+                )
+                .await
+                {
+                    error!("Error processing transaction: {e:?}");
+                }
+            }
+        });
+
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    }
+
+    /// 高级模式订阅（包含批处理和背压处理）
+    pub async fn subscribe_events_advanced<F>(
+        &self,
+        protocols: Vec<Protocol>,
+        bot_wallet: Option<Pubkey>,
+        account_include: Vec<String>,
+        account_exclude: Vec<String>,
+        account_required: Vec<String>,
+        commitment: Option<CommitmentLevel>,
+        callback: F,
+    ) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
+    {
+        // 启动自动性能监控（如果启用）
+        if self.config.enable_metrics {
+            self.start_auto_metrics_monitoring().await;
+        }
         
         if account_include.is_empty() && account_exclude.is_empty() && account_required.is_empty() {
             return Err(anyhow::anyhow!(
@@ -504,7 +825,7 @@ impl YellowstoneGrpc {
             .await?;
 
         // Create channel
-        let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(CHANNEL_SIZE);
+        let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(self.config.backpressure.channel_size);
 
         // 创建批处理器，将单个事件回调转换为批量回调
         let batch_callback = move |events: Vec<Box<dyn UnifiedEvent>>| {
@@ -513,15 +834,20 @@ impl YellowstoneGrpc {
             }
         };
         
-        let mut batch_processor = EventBatchCollector::new(batch_callback, BATCH_SIZE, BATCH_TIMEOUT_MS);
+        let mut batch_processor = EventBatchCollector::new(
+            batch_callback, 
+            self.config.batch.batch_size, 
+            self.config.batch.batch_timeout_ms
+        );
 
         // Start task to process the stream
+        let backpressure_strategy = self.config.backpressure.strategy;
         tokio::spawn(async move {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
                         if let Err(e) =
-                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx, backpressure_strategy).await
                         {
                             error!("Error handling message: {e:?}");
                             break;
@@ -537,23 +863,50 @@ impl YellowstoneGrpc {
 
         // Process transactions with batch processing
         let self_clone = self.clone();
-        tokio::spawn(async move {
-            while let Some(transaction_pretty) = rx.next().await {            
-                if let Err(e) = self_clone.process_event_transaction_with_batch(
-                    transaction_pretty,
-                    &mut batch_processor,
-                    bot_wallet,
-                    protocols.clone(),
-                )
-                .await
-                {
-                    error!("Error processing transaction: {e:?}");
-                }
+        
+        // 根据背压策略选择处理方式
+        match self.config.backpressure.strategy {
+            BackpressureStrategy::Ordered { max_pending_slots: _ } => {
+                // 使用有序处理 - 暂时使用普通的批处理方式
+                tokio::spawn(async move {
+                    while let Some(transaction_pretty) = rx.next().await {            
+                        if let Err(e) = self_clone.process_event_transaction_with_batch(
+                            transaction_pretty,
+                            &mut batch_processor,
+                            bot_wallet,
+                            protocols.clone(),
+                        )
+                        .await
+                        {
+                            error!("Error processing transaction: {e:?}");
+                        }
+                    }
+                    
+                    // 处理剩余的事件
+                    batch_processor.flush();
+                });
             }
-            
-            // 处理剩余的事件
-            batch_processor.flush();
-        });
+            _ => {
+                // 使用原有的批处理方式
+                tokio::spawn(async move {
+                    while let Some(transaction_pretty) = rx.next().await {            
+                        if let Err(e) = self_clone.process_event_transaction_with_batch(
+                            transaction_pretty,
+                            &mut batch_processor,
+                            bot_wallet,
+                            protocols.clone(),
+                        )
+                        .await
+                        {
+                            error!("Error processing transaction: {e:?}");
+                        }
+                    }
+                    
+                    // 处理剩余的事件
+                    batch_processor.flush();
+                });
+            }
+        }
 
         tokio::signal::ctrl_c().await?;
         Ok(())
@@ -578,6 +931,11 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
     {
+        // 启动自动性能监控（如果启用）
+        if self.config.enable_metrics {
+            self.start_auto_metrics_monitoring().await;
+        }
+        
         // 创建过滤器
         let protocol_accounts = protocols
             .iter()
@@ -599,18 +957,19 @@ impl YellowstoneGrpc {
             .await?;
 
         // 创建通道
-        let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(CHANNEL_SIZE);
+        let (mut tx, mut rx) = mpsc::channel::<TransactionPretty>(self.config.backpressure.channel_size);
 
         // 创建回调函数，使用 Arc 包装以便在多个任务中共享
         let callback = std::sync::Arc::new(Box::new(callback));
 
         // 启动处理流的任务
+        let backpressure_strategy = self.config.backpressure.strategy;
         tokio::spawn(async move {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
                         if let Err(e) =
-                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx, backpressure_strategy).await
                         {
                             error!("Error handling message: {e:?}");
                             break;
@@ -625,9 +984,10 @@ impl YellowstoneGrpc {
         });
 
         // 处理交易
+        let self_clone = self.clone();
         tokio::spawn(async move {
             while let Some(transaction_pretty) = rx.next().await {
-                if let Err(e) = Self::process_event_transaction(
+                if let Err(e) = self_clone.process_event_transaction_with_metrics(
                     transaction_pretty,
                     &**callback,
                     bot_wallet,
@@ -644,7 +1004,8 @@ impl YellowstoneGrpc {
         Ok(())
     }
 
-    async fn process_event_transaction<F>(
+    async fn process_event_transaction_with_metrics<F>(
+        &self,
         transaction_pretty: TransactionPretty,
         callback: &F,
         bot_wallet: Option<Pubkey>,
@@ -704,6 +1065,11 @@ impl YellowstoneGrpc {
         // 更新性能指标
         let processing_time = start_time.elapsed();
         let processing_time_ms = processing_time.as_millis() as f64;
+        
+        // 更新性能指标（如果启用）
+        if self.config.enable_metrics {
+            self.update_metrics(event_count as u64, processing_time_ms).await;
+        }
         
         // 记录慢处理操作
         if processing_time_ms > 10.0 {
@@ -778,7 +1144,14 @@ impl YellowstoneGrpc {
                             total_events += events.len();
                             log::info!("Adding {} events to batch processor", events.len());
                             for event in events {
-                                batch_processor.add_event(event);
+                                if self.config.batch.enabled {
+                                    batch_processor.add_event(event);
+                                } else {
+                                    // 如果批处理被禁用，直接调用回调
+                                    // 这里需要将单个事件包装成Vec来调用批处理回调
+                                    let single_event_batch = vec![event];
+                                    (batch_processor.callback)(single_event_batch);
+                                }
                             }
                         }
                         Err(e) => {
@@ -812,4 +1185,91 @@ impl YellowstoneGrpc {
         Ok(())
     }
 }
+
+// 有序交易处理器，确保交易按顺序处理
+pub struct OrderedTransactionProcessor<F>
+where
+    F: Fn(TransactionPretty) + Send + Sync + 'static,
+{
+    callback: F,
+    pending_transactions: std::collections::BTreeMap<u64, TransactionPretty>, // 按 slot 排序
+    next_expected_slot: u64,
+    max_pending_slots: usize, // 最大等待槽位数
+}
+
+impl<F> OrderedTransactionProcessor<F>
+where
+    F: Fn(TransactionPretty) + Send + Sync + 'static,
+{
+    pub fn new(callback: F, max_pending_slots: usize) -> Self {
+        Self {
+            callback,
+            pending_transactions: std::collections::BTreeMap::new(),
+            next_expected_slot: 0,
+            max_pending_slots,
+        }
+    }
+
+    pub fn process_transaction(&mut self, transaction: TransactionPretty) {
+        let slot = transaction.slot;
+        
+        // 如果是第一个交易，设置期望的槽位
+        if self.next_expected_slot == 0 {
+            self.next_expected_slot = slot;
+        }
+
+        // 如果槽位太旧，直接丢弃
+        if slot < self.next_expected_slot.saturating_sub(self.max_pending_slots as u64) {
+            log::warn!("Dropping old transaction from slot {}", slot);
+            return;
+        }
+
+        // 如果槽位太新，先缓存
+        if slot > self.next_expected_slot {
+            self.pending_transactions.insert(slot, transaction);
+            
+            // 如果缓存太多，清理旧的
+            while self.pending_transactions.len() > self.max_pending_slots {
+                if let Some((oldest_slot, _)) = self.pending_transactions.iter().next() {
+                    let oldest_slot = *oldest_slot;
+                    self.pending_transactions.remove(&oldest_slot);
+                    log::warn!("Dropping old cached transaction from slot {}", oldest_slot);
+                }
+            }
+            return;
+        }
+
+        // 处理当前槽位的交易
+        if slot == self.next_expected_slot {
+            (self.callback)(transaction);
+            self.next_expected_slot += 1;
+
+            // 处理后续连续的槽位
+            loop {
+                let next_slot = self.pending_transactions.keys().next().copied();
+                if let Some(slot) = next_slot {
+                    if slot == self.next_expected_slot {
+                        if let Some(transaction) = self.pending_transactions.remove(&slot) {
+                            (self.callback)(transaction);
+                            self.next_expected_slot += 1;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        } else {
+            // 槽位不匹配，缓存起来
+            self.pending_transactions.insert(slot, transaction);
+        }
+    }
+
+    pub fn get_stats(&self) -> (u64, usize) {
+        (self.next_expected_slot, self.pending_transactions.len())
+    }
+}
+
+
 

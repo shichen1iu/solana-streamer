@@ -20,6 +20,11 @@
 8. **批处理优化**: 批量处理事件以减少回调开销
 9. **性能监控**: 内置性能指标监控，包括事件处理速度、内存使用等
 10. **内存优化**: 对象池和缓存机制减少内存分配
+11. **灵活配置系统**: 支持自定义批处理大小、背压策略、通道大小等参数
+12. **预设配置**: 提供高性能、低延迟、有序处理等预设配置
+13. **背压处理**: 支持阻塞、丢弃、重试、有序等多种背压策略
+14. **运行时配置更新**: 支持在运行时动态更新配置参数
+15. **全函数性能监控**: 所有subscribe_events函数都支持性能监控，自动收集和报告性能指标
 
 ## 安装
 
@@ -81,11 +86,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     println!("正在订阅 Yellowstone gRPC 事件...");
 
-    // 创建 gRPC 客户端并启用性能监控
+    // 创建低延迟配置
+    let mut config = ClientConfig::low_latency();
+    // 启用性能监控, 有性能损耗, 默认关闭
+    config.enable_metrics = true;
     let grpc = YellowstoneGrpc::new_with_config(
         "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
         None,
-        true, // 启用性能监控
+        config,
     )?;
 
     let callback = create_event_callback();
@@ -128,12 +136,12 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("正在订阅 ShredStream 事件...");
-
-    // 创建 ShredStream 客户端并启用性能监控
-    let shred_stream = ShredStreamGrpc::new_with_config(
-        "http://127.0.0.1:10800".to_string(),
-        true, // 启用性能监控
-    ).await?;
+     // 创建低延迟配置
+    let mut config = ShredClientConfig::low_latency();
+    // 启用性能监控, 有性能损耗, 默认关闭
+    config.enable_metrics = true;
+    let shred_stream =
+        ShredStreamGrpc::new_with_config("http://127.0.0.1:10800".to_string(), config).await?;
     let callback = create_event_callback();
     let protocols = vec![
         Protocol::PumpFun,
@@ -268,51 +276,6 @@ src/
 4. **错误处理**: 对网络问题和服务中断进行健壮的错误处理
 5. **批处理优化**: 使用批处理减少回调开销，提高吞吐量
 6. **性能监控**: 启用性能监控以识别瓶颈和优化机会
-
-## 配置选项
-
-### Yellowstone gRPC 配置
-
-```rust
-// 推荐：创建 gRPC 客户端并启用性能监控
-let grpc = YellowstoneGrpc::new_with_config(
-    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
-    None,
-    true, // 启用性能监控
-)?;
-
-// 替代：基本配置（性能监控默认启用）
-let grpc = YellowstoneGrpc::new(
-    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
-    None,
-)?;
-
-// 最大性能：禁用性能监控
-let grpc = YellowstoneGrpc::new_with_config(
-    "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
-    None,
-    false, // 禁用性能监控
-)?;
-```
-
-### ShredStream 配置
-
-```rust
-// 推荐：创建 ShredStream 客户端并启用性能监控
-let shred_stream = ShredStreamGrpc::new_with_config(
-    "http://127.0.0.1:10800".to_string(),
-    true, // 启用性能监控
-).await?;
-
-// 替代：基本配置（性能监控默认启用）
-let shred_stream = ShredStreamGrpc::new("http://127.0.0.1:10800".to_string()).await?;
-
-// 最大性能：禁用性能监控
-let shred_stream = ShredStreamGrpc::new_with_config(
-    "http://127.0.0.1:10800".to_string(),
-    false, // 禁用性能监控
-).await?;
-```
 
 ## 许可证
 

@@ -20,6 +20,8 @@ use solana_streamer_sdk::{
             Protocol, UnifiedEvent,
         },
         ShredStreamGrpc, YellowstoneGrpc,
+        yellowstone_grpc::ClientConfig,
+        shred_stream::ShredClientConfig,
     },
 };
 
@@ -34,11 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to Yellowstone gRPC events...");
 
-    // enable_metrics 为 true 时，会打印性能指标
+    // Create low-latency configuration
+    let mut config = ClientConfig::low_latency();
+    // Enable performance monitoring, has performance overhead, disabled by default
+    config.enable_metrics = true;
     let grpc = YellowstoneGrpc::new_with_config(
         "https://solana-yellowstone-grpc.publicnode.com:443".to_string(),
         None,
-        true,
+        config,
     )?;
 
     println!("GRPC client created successfully");
@@ -89,9 +94,12 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to ShredStream events...");
 
-    // enable_metrics 为 true 时，会打印性能指标
+    // Create low-latency configuration
+    let mut config = ShredClientConfig::low_latency();
+    // Enable performance monitoring, has performance overhead, disabled by default
+    config.enable_metrics = true;
     let shred_stream =
-        ShredStreamGrpc::new_with_config("http://127.0.0.1:10800".to_string(), true).await?;
+        ShredStreamGrpc::new_with_config("http://127.0.0.1:10800".to_string(), config).await?;
 
     let callback = create_event_callback();
     let protocols = vec![
@@ -113,7 +121,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
         println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
-                // 使用grpc的时候，可以从每个事件中获取到block_time
+                // When using grpc, you can get block_time from each event
                 println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },

@@ -15,13 +15,99 @@ use crate::protos::shredstream::shredstream_proxy_client::ShredstreamProxyClient
 use crate::protos::shredstream::SubscribeEntriesRequest;
 use solana_sdk::pubkey::Pubkey;
 
-// 根据实际并发量调整通道大小，避免背压
-const CHANNEL_SIZE: usize = 5000;
+// 默认配置常量
+const DEFAULT_CHANNEL_SIZE: usize = 1000;
+const DEFAULT_BATCH_SIZE: usize = 100;
+const DEFAULT_BATCH_TIMEOUT_MS: u64 = 5;
 
-// 批处理配置
-const SHRED_BATCH_SIZE: usize = 100;
-#[allow(dead_code)]
-const SHRED_BATCH_TIMEOUT_MS: u64 = 5;
+/// ShredStream批处理配置
+#[derive(Debug, Clone)]
+pub struct ShredBatchConfig {
+    /// 批处理大小（默认：100）
+    pub batch_size: usize,
+    /// 批处理超时时间（毫秒，默认：10ms）
+    pub batch_timeout_ms: u64,
+    /// 是否启用批处理（默认：true）
+    pub enabled: bool,
+}
+
+impl Default for ShredBatchConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: DEFAULT_BATCH_SIZE,
+            batch_timeout_ms: DEFAULT_BATCH_TIMEOUT_MS,
+            enabled: true,
+        }
+    }
+}
+
+/// ShredStream背压配置
+#[derive(Debug, Clone)]
+pub struct ShredBackpressureConfig {
+    /// 通道大小（默认：10000）
+    pub channel_size: usize,
+}
+
+impl Default for ShredBackpressureConfig {
+    fn default() -> Self {
+        Self {
+            channel_size: DEFAULT_CHANNEL_SIZE,
+        }
+    }
+}
+
+/// ShredStream完整配置
+#[derive(Debug, Clone)]
+pub struct ShredClientConfig {
+    /// 批处理配置
+    pub batch: ShredBatchConfig,
+    /// 背压配置
+    pub backpressure: ShredBackpressureConfig,
+    /// 是否启用性能监控（默认：false）
+    pub enable_metrics: bool,
+}
+
+impl Default for ShredClientConfig {
+    fn default() -> Self {
+        Self {
+            batch: ShredBatchConfig::default(),
+            backpressure: ShredBackpressureConfig::default(),
+            enable_metrics: false,
+        }
+    }
+}
+
+impl ShredClientConfig {
+    /// 创建高性能配置（适合高并发场景）
+    pub fn high_performance() -> Self {
+        Self {
+            batch: ShredBatchConfig {
+                batch_size: 200,
+                batch_timeout_ms: 5,
+                enabled: true,
+            },
+            backpressure: ShredBackpressureConfig {
+                channel_size: 20000,
+            },
+            enable_metrics: true,
+        }
+    }
+
+    /// 创建低延迟配置（适合实时场景）
+    pub fn low_latency() -> Self {
+        Self {
+            batch: ShredBatchConfig {
+                batch_size: 10,
+                batch_timeout_ms: 1,
+                enabled: false, // 禁用批处理，即时处理
+            },
+            backpressure: ShredBackpressureConfig {
+                channel_size: 1000,
+            },
+            enable_metrics: false,
+        }
+    }
+}
 
 /// ShredStream性能监控指标
 #[derive(Debug, Clone)]
@@ -63,8 +149,8 @@ impl ShredPerformanceMetrics {
 #[derive(Clone)]
 pub struct ShredStreamGrpc {
     shredstream_client: Arc<ShredstreamProxyClient<Channel>>,
+    config: ShredClientConfig,
     metrics: Arc<Mutex<ShredPerformanceMetrics>>,
-    enable_metrics: bool, // 是否启用性能监控
 }
 
 struct TransactionWithSlot {
@@ -80,24 +166,29 @@ where
     callback: F,
     batch: Vec<Box<dyn UnifiedEvent>>,
     batch_size: usize,
+    timeout_ms: u64,
+    last_flush_time: std::time::Instant,
 }
 
 impl<F> ShredBatchProcessor<F>
 where
     F: FnMut(Vec<Box<dyn UnifiedEvent>>) + Send + Sync + 'static,
 {
-    pub fn new(callback: F, batch_size: usize) -> Self {
+    pub fn new(callback: F, batch_size: usize, timeout_ms: u64) -> Self {
         Self {
             callback,
             batch: Vec::with_capacity(batch_size),
             batch_size,
+            timeout_ms,
+            last_flush_time: std::time::Instant::now(),
         }
     }
 
     pub fn add_event(&mut self, event: Box<dyn UnifiedEvent>) {
         self.batch.push(event);
         
-        if self.batch.len() >= self.batch_size {
+        // 检查是否需要刷新批次
+        if self.batch.len() >= self.batch_size || self.should_flush_by_timeout() {
             self.flush();
         }
     }
@@ -106,22 +197,49 @@ where
         if !self.batch.is_empty() {
             let events = std::mem::replace(&mut self.batch, Vec::with_capacity(self.batch_size));
             (self.callback)(events);
+            self.last_flush_time = std::time::Instant::now();
         }
+    }
+
+    fn should_flush_by_timeout(&self) -> bool {
+        self.last_flush_time.elapsed().as_millis() >= self.timeout_ms as u128
     }
 }
 
 impl ShredStreamGrpc {
+    /// 创建客户端，使用默认配置
     pub async fn new(endpoint: String) -> AnyResult<Self> {
-        Self::new_with_config(endpoint, true).await
+        Self::new_with_config(endpoint, ShredClientConfig::default()).await
     }
 
-    pub async fn new_with_config(endpoint: String, enable_metrics: bool) -> AnyResult<Self> {
+    /// 创建客户端，使用自定义配置
+    pub async fn new_with_config(endpoint: String, config: ShredClientConfig) -> AnyResult<Self> {
         let shredstream_client = ShredstreamProxyClient::connect(endpoint.clone()).await?;
         Ok(Self {
             shredstream_client: Arc::new(shredstream_client),
+            config,
             metrics: Arc::new(Mutex::new(ShredPerformanceMetrics::new())),
-            enable_metrics,
         })
+    }
+
+    /// 创建高性能客户端（适合高并发场景）
+    pub async fn new_high_performance(endpoint: String) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, ShredClientConfig::high_performance()).await
+    }
+
+    /// 创建低延迟客户端（适合实时场景）
+    pub async fn new_low_latency(endpoint: String) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, ShredClientConfig::low_latency()).await
+    }
+
+    /// 获取当前配置
+    pub fn get_config(&self) -> &ShredClientConfig {
+        &self.config
+    }
+
+    /// 更新配置
+    pub fn update_config(&mut self, config: ShredClientConfig) {
+        self.config = config;
     }
 
     /// 获取性能指标
@@ -132,7 +250,7 @@ impl ShredStreamGrpc {
 
     /// 启用或禁用性能监控
     pub fn set_enable_metrics(&mut self, enabled: bool) {
-        self.enable_metrics = enabled;
+        self.config.enable_metrics = enabled;
     }
 
     /// 打印性能指标
@@ -151,7 +269,7 @@ impl ShredStreamGrpc {
     /// 启动自动性能监控任务
     pub async fn start_auto_metrics_monitoring(&self) {
         // 检查是否启用性能监控
-        if !self.enable_metrics {
+        if !self.config.enable_metrics {
             return; // 如果未启用性能监控，不启动监控任务
         }
 
@@ -168,7 +286,7 @@ impl ShredStreamGrpc {
     /// 更新性能指标
     async fn update_metrics(&self, events_processed: u64, processing_time_ms: f64) {
         // 检查是否启用性能监控
-        if !self.enable_metrics {
+        if !self.config.enable_metrics {
             return; // 如果未启用性能监控，直接返回
         }
 
@@ -217,6 +335,7 @@ impl ShredStreamGrpc {
         metrics.memory_usage_mb = metrics.events_processed as f64 * 0.001; // 每个事件约1KB
     }
 
+    /// 订阅ShredStream事件（支持批处理和即时处理）
     pub async fn shredstream_subscribe<F>(
         &self,
         protocols: Vec<Protocol>,
@@ -226,14 +345,39 @@ impl ShredStreamGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
     {
-        // 启动自动性能监控
-        self.start_auto_metrics_monitoring().await;
+        // 启动自动性能监控（如果启用）
+        if self.config.enable_metrics {
+            self.start_auto_metrics_monitoring().await;
+        }
         
         let request = tonic::Request::new(SubscribeEntriesRequest {});
         let mut client = (*self.shredstream_client).clone();
-        let mut stream = client.subscribe_entries(request).await?.into_inner();
-        let (mut tx, mut rx) = mpsc::channel::<TransactionWithSlot>(CHANNEL_SIZE);
+        let stream = client.subscribe_entries(request).await?.into_inner();
+        let (tx, rx) = mpsc::channel::<TransactionWithSlot>(self.config.backpressure.channel_size);
         
+        // 根据配置选择处理模式
+        if self.config.batch.enabled {
+            // 批处理模式
+            self.process_with_batch(stream, tx, rx, protocols, bot_wallet, callback).await
+        } else {
+            // 即时处理模式
+            self.process_immediate(stream, tx, rx, protocols, bot_wallet, callback).await
+        }
+    }
+
+    /// 批处理模式
+    async fn process_with_batch<F>(
+        &self,
+        mut stream: tonic::codec::Streaming<crate::protos::shredstream::Entry>,
+        mut tx: mpsc::Sender<TransactionWithSlot>,
+        mut rx: mpsc::Receiver<TransactionWithSlot>,
+        protocols: Vec<Protocol>,
+        bot_wallet: Option<Pubkey>,
+        callback: F,
+    ) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
+    {
         // 创建批处理器，将单个事件回调转换为批量回调
         let batch_callback = move |events: Vec<Box<dyn UnifiedEvent>>| {
             for event in events {
@@ -241,7 +385,11 @@ impl ShredStreamGrpc {
             }
         };
         
-        let mut batch_processor = ShredBatchProcessor::new(batch_callback, SHRED_BATCH_SIZE);
+        let mut batch_processor = ShredBatchProcessor::new(
+            batch_callback, 
+            self.config.batch.batch_size, 
+            self.config.batch.batch_timeout_ms
+        );
         
         tokio::spawn(async move {
             while let Some(message) = stream.next().await {
@@ -282,6 +430,119 @@ impl ShredStreamGrpc {
         
         // 处理剩余的事件
         batch_processor.flush();
+
+        Ok(())
+    }
+
+    /// 即时处理模式
+    async fn process_immediate<F>(
+        &self,
+        mut stream: tonic::codec::Streaming<crate::protos::shredstream::Entry>,
+        mut tx: mpsc::Sender<TransactionWithSlot>,
+        mut rx: mpsc::Receiver<TransactionWithSlot>,
+        protocols: Vec<Protocol>,
+        bot_wallet: Option<Pubkey>,
+        callback: F,
+    ) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
+    {
+        tokio::spawn(async move {
+            while let Some(message) = stream.next().await {
+                match message {
+                    Ok(msg) => {
+                        if let Ok(entries) = bincode::deserialize::<Vec<Entry>>(&msg.entries) {
+                            for entry in entries {
+                                for transaction in entry.transactions {
+                                    let _ = tx.try_send(TransactionWithSlot {
+                                        transaction: transaction.clone(),
+                                        slot: msg.slot,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        error!("Stream error: {error:?}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let self_clone = self.clone();
+        while let Some(transaction_with_slot) = rx.next().await {
+            if let Err(e) = self_clone.process_transaction_immediate(
+                transaction_with_slot,
+                protocols.clone(),
+                bot_wallet,
+                &callback,
+            )
+            .await
+            {
+                error!("Error processing transaction: {e:?}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 即时处理单个交易
+    async fn process_transaction_immediate<F>(
+        &self,
+        transaction_with_slot: TransactionWithSlot,
+        protocols: Vec<Protocol>,
+        bot_wallet: Option<Pubkey>,
+        callback: &F,
+    ) -> AnyResult<()>
+    where
+        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
+    {
+        let start_time = std::time::Instant::now();
+        let program_received_time_ms = chrono::Utc::now().timestamp_millis();
+        let slot = transaction_with_slot.slot;
+        let versioned_tx = transaction_with_slot.transaction;
+        let signature = versioned_tx.signatures[0];
+
+        // 预分配向量容量
+        let mut all_events = Vec::with_capacity(protocols.len() * 2);
+        
+        for protocol in protocols {
+            let parser = EventParserFactory::create_parser(protocol.clone());
+            let events = parser
+                .parse_versioned_transaction(
+                    &versioned_tx,
+                    &signature.to_string(),
+                    Some(slot),
+                    None,
+                    program_received_time_ms,
+                    bot_wallet,
+                )
+                .await
+                .unwrap_or_else(|_e| vec![]);
+            all_events.extend(events);
+        }
+        
+        // 保存事件数量用于日志记录
+        let event_count = all_events.len();
+        
+        // 即时处理事件
+        for event in all_events {
+            callback(event);
+        }
+        
+        // 更新性能指标
+        let processing_time = start_time.elapsed();
+        let processing_time_ms = processing_time.as_millis() as f64;
+        
+        // 实际调用性能指标更新
+        self.update_metrics(event_count as u64, processing_time_ms).await;
+        
+        // 记录慢处理操作
+        if processing_time_ms > 5.0 {
+            log::warn!("ShredStream transaction processing took {}ms for {} events", 
+                      processing_time_ms, event_count);
+        }
 
         Ok(())
     }

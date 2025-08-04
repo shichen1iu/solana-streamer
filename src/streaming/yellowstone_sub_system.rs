@@ -1,6 +1,6 @@
 use crate::{
     common::AnyResult,
-    streaming::yellowstone_grpc::{TransactionPretty, YellowstoneGrpc},
+    streaming::yellowstone_grpc::{TransactionPretty, YellowstoneGrpc, BackpressureStrategy},
 };
 use futures::{channel::mpsc, StreamExt};
 use log::error;
@@ -10,7 +10,7 @@ use solana_transaction_status::EncodedTransactionWithStatusMeta;
 
 const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
 // 根据实际并发量调整通道大小，避免背压
-const CHANNEL_SIZE: usize = 5000;
+const CHANNEL_SIZE: usize = 50000;  // 增加到 50000
 
 #[derive(Debug)]
 pub enum SystemEvent {
@@ -51,7 +51,7 @@ impl YellowstoneGrpc {
                 match message {
                     Ok(msg) => {
                         if let Err(e) =
-                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx).await
+                            Self::handle_stream_message(msg, &mut tx, &mut subscribe_tx, BackpressureStrategy::Block).await
                         {
                             error!("Error handling message: {e:?}");
                             break;
