@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to Yellowstone gRPC events...");
 
-     // Create low-latency configuration
+    // Create low-latency configuration
     let mut config = ClientConfig::low_latency();
     // Enable performance monitoring, has performance overhead, disabled by default
     config.enable_metrics = true;
@@ -150,7 +150,7 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to ShredStream events...");
 
-     // Create low-latency configuration
+    // Create low-latency configuration
     let mut config = ShredClientConfig::low_latency();
     // Enable performance monitoring, has performance overhead, disabled by default
     config.enable_metrics = true;

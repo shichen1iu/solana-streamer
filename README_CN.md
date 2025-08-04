@@ -136,7 +136,7 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("正在订阅 ShredStream 事件...");
-     // 创建低延迟配置
+    // 创建低延迟配置
     let mut config = ShredClientConfig::low_latency();
     // 启用性能监控, 有性能损耗, 默认关闭
     config.enable_metrics = true;
