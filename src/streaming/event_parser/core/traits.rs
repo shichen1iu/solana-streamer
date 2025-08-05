@@ -271,13 +271,15 @@ pub trait EventParser: Send + Sync {
         program_received_time_ms: i64,
         bot_wallet: Option<Pubkey>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
-        // 生成缓存键
-        let cache_key = format!("{}_{}_{}", signature, slot.unwrap_or(0), program_received_time_ms);
+
+        // TODO: bug - 待优化
+        // // 生成缓存键
+        // let cache_key = format!("{}_{}_{}", signature, slot.unwrap_or(0), program_received_time_ms);
         
-        // 尝试从缓存获取
-        if let Some(cached_events) = PARSE_CACHE.get(&cache_key).await {
-            return Ok(cached_events);
-        }
+        // // 尝试从缓存获取
+        // if let Some(cached_events) = PARSE_CACHE.get(&cache_key).await {
+        //     return Ok(cached_events);
+        // }
         
         let transaction = tx.transaction;
         // 检查交易元数据
@@ -443,7 +445,7 @@ pub trait EventParser: Send + Sync {
         let result = self.process_events(instruction_events, bot_wallet);
         
         // 缓存结果
-        PARSE_CACHE.set(cache_key, result.clone()).await;
+        // PARSE_CACHE.set(cache_key, result.clone()).await;
         
         Ok(result)
     }

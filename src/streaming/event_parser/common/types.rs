@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::UiInstruction;
-use std::sync::Arc;
+use std::{hash::{DefaultHasher, Hash, Hasher}, sync::Arc};
 use tokio::sync::Mutex;
 
 // Object pool size configuration
@@ -320,7 +320,11 @@ impl EventMetadata {
     }
 
     pub fn set_id(&mut self, id: String) {
-        self.id = id;
+        let _id = format!("{}-{}-{}", self.signature, self.event_type.to_string(), id);
+        let mut hasher = DefaultHasher::new();
+        _id.hash(&mut hasher);
+        let hash_value = hasher.finish();
+        self.id = format!("{:x}", hash_value);
     }
 
     pub fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>) {
