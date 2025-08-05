@@ -159,7 +159,7 @@ impl PumpFunEventParser {
         accounts: &[Pubkey],
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
-        if data.len() < 16 || accounts.len() < 11 {
+        if data.len() < 16 || accounts.len() < 13 {
             return None;
         }
         let amount = u64::from_le_bytes(data[0..8].try_into().unwrap());
@@ -273,6 +273,6 @@ impl EventParser for PumpFunEventParser {
     }
 
     fn supported_program_ids(&self) -> Vec<Pubkey> {
-        vec![PUMPFUN_PROGRAM_ID]
+        self.inner.supported_program_ids()
     }
 }

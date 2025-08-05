@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt, time::Duration};
 use chrono::Local;
 use futures::{channel::mpsc, sink::Sink, SinkExt, Stream, StreamExt};
 use log::{error, info};
-use prost_types::Timestamp;
+use yellowstone_grpc_proto::prost_types::Timestamp;
 use rustls::crypto::{ring::default_provider, CryptoProvider};
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use solana_transaction_status::{EncodedTransactionWithStatusMeta, UiTransactionEncoding};
@@ -1035,7 +1035,10 @@ impl YellowstoneGrpc {
                         tx_clone,
                         &signature_clone,
                         Some(slot),
-                        transaction_pretty.block_time,
+                        transaction_pretty.block_time.map(|ts| prost_types::Timestamp {
+                            seconds: ts.seconds,
+                            nanos: ts.nanos,
+                        }),
                         program_received_time_ms,
                         bot_wallet_clone,
                     )
@@ -1111,7 +1114,10 @@ impl YellowstoneGrpc {
                         tx_clone,
                         &signature_clone,
                         Some(slot),
-                        transaction_pretty.block_time,
+                        transaction_pretty.block_time.map(|ts| prost_types::Timestamp {
+                            seconds: ts.seconds,
+                            nanos: ts.nanos,
+                        }),
                         program_received_time_ms,
                         bot_wallet_clone,
                     )

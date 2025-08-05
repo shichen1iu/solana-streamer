@@ -358,7 +358,7 @@ pub trait EventParser: Send + Sync {
                                 slot,
                                 block_time,
                                 program_received_time_ms,
-                                format!("{index}"),
+                                format!("{}.{}", inner_instruction.index, index),
                             )
                             .await
                         {
@@ -367,7 +367,7 @@ pub trait EventParser: Send + Sync {
                                     let transfer_datas =
                                         parse_transfer_datas_from_next_instructions(
                                             &inner_instruction,
-                                            -1_i8,
+                                            index as i8,
                                             &accounts,
                                             event.event_type(),
                                         );

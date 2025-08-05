@@ -419,6 +419,6 @@ impl EventParser for PumpSwapEventParser {
     }
 
     fn supported_program_ids(&self) -> Vec<Pubkey> {
-        vec![PUMPSWAP_PROGRAM_ID]
+        self.inner.supported_program_ids()
     }
 }
