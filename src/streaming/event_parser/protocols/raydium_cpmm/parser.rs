@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use prost_types::Timestamp;
 use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
 use solana_transaction_status::UiCompiledInstruction;
@@ -28,6 +30,8 @@ impl RaydiumCpmmEventParser {
         // 配置所有事件类型
         let configs = vec![
             GenericEventParseConfig {
+                program_id: RAYDIUM_CPMM_PROGRAM_ID,
+                protocol_type: ProtocolType::RaydiumCpmm,
                 inner_instruction_discriminator: "",
                 instruction_discriminator: discriminators::SWAP_BASE_IN,
                 event_type: EventType::RaydiumCpmmSwapBaseInput,
@@ -35,6 +39,8 @@ impl RaydiumCpmmEventParser {
                 instruction_parser: Self::parse_swap_base_input_instruction,
             },
             GenericEventParseConfig {
+                program_id: RAYDIUM_CPMM_PROGRAM_ID,
+                protocol_type: ProtocolType::RaydiumCpmm,
                 inner_instruction_discriminator: "",
                 instruction_discriminator: discriminators::SWAP_BASE_OUT,
                 event_type: EventType::RaydiumCpmmSwapBaseOutput,
@@ -43,8 +49,7 @@ impl RaydiumCpmmEventParser {
             },
         ];
 
-        let inner =
-            GenericEventParser::new(RAYDIUM_CPMM_PROGRAM_ID, ProtocolType::RaydiumCpmm, configs);
+        let inner = GenericEventParser::new(vec![RAYDIUM_CPMM_PROGRAM_ID], configs);
 
         Self { inner }
     }
@@ -135,6 +140,12 @@ impl RaydiumCpmmEventParser {
 
 #[async_trait::async_trait]
 impl EventParser for RaydiumCpmmEventParser {
+    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
+        self.inner.inner_instruction_configs()
+    }
+    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
+        self.inner.instruction_configs()
+    }
     fn parse_events_from_inner_instruction(
         &self,
         inner_instruction: &UiCompiledInstruction,

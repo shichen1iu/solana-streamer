@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use prost_types::Timestamp;
 use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
 use solana_transaction_status::UiCompiledInstruction;
@@ -28,6 +30,8 @@ impl PumpFunEventParser {
         // 配置所有事件类型
         let configs = vec![
             GenericEventParseConfig {
+                program_id: PUMPFUN_PROGRAM_ID,
+                protocol_type: ProtocolType::PumpFun,
                 inner_instruction_discriminator: discriminators::CREATE_TOKEN_EVENT,
                 instruction_discriminator: discriminators::CREATE_TOKEN_IX,
                 event_type: EventType::PumpFunCreateToken,
@@ -35,6 +39,8 @@ impl PumpFunEventParser {
                 instruction_parser: Self::parse_create_token_instruction,
             },
             GenericEventParseConfig {
+                program_id: PUMPFUN_PROGRAM_ID,
+                protocol_type: ProtocolType::PumpFun,
                 inner_instruction_discriminator: discriminators::TRADE_EVENT,
                 instruction_discriminator: discriminators::BUY_IX,
                 event_type: EventType::PumpFunBuy,
@@ -42,6 +48,8 @@ impl PumpFunEventParser {
                 instruction_parser: Self::parse_buy_instruction,
             },
             GenericEventParseConfig {
+                program_id: PUMPFUN_PROGRAM_ID,
+                protocol_type: ProtocolType::PumpFun,
                 inner_instruction_discriminator: discriminators::TRADE_EVENT,
                 instruction_discriminator: discriminators::SELL_IX,
                 event_type: EventType::PumpFunSell,
@@ -50,7 +58,7 @@ impl PumpFunEventParser {
             },
         ];
 
-        let inner = GenericEventParser::new(PUMPFUN_PROGRAM_ID, ProtocolType::PumpFun, configs);
+        let inner = GenericEventParser::new(vec![PUMPFUN_PROGRAM_ID], configs);
 
         Self { inner }
     }
@@ -228,6 +236,12 @@ impl PumpFunEventParser {
 
 #[async_trait::async_trait]
 impl EventParser for PumpFunEventParser {
+    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
+        self.inner.inner_instruction_configs()
+    }
+    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
+        self.inner.instruction_configs()
+    }
     fn parse_events_from_inner_instruction(
         &self,
         inner_instruction: &UiCompiledInstruction,

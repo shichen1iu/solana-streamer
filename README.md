@@ -18,7 +18,7 @@ A lightweight Rust library for real-time event streaming from Solana DEX trading
 6. **Event Parsing System**: Automatic parsing and categorization of protocol-specific events
 7. **High Performance**: Optimized for low-latency event processing
 8. **Batch Processing Optimization**: Batch processing events to reduce callback overhead
-9. **Performance Monitoring**: Built-in performance metrics monitoring, including event processing speed, memory usage, etc.
+9. **Performance Monitoring**: Built-in performance metrics monitoring, including event processing speed, etc.
 10. **Memory Optimization**: Object pooling and caching mechanisms to reduce memory allocations
 11. **Flexible Configuration System**: Support for custom batch sizes, backpressure strategies, channel sizes, and other parameters
 12. **Preset Configurations**: Provides high-performance, low-latency, ordered processing, and other preset configurations
@@ -41,17 +41,32 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.1.11" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.2.0" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = "0.1.11"
+solana-streamer-sdk = "0.2.0"
 ```
 
 ## Usage Examples
+
+### Quick Start - Parse Transaction Events
+
+You can quickly test the library by running the built-in example that parses transaction events:
+
+```bash
+cargo run --example parse_tx_events
+```
+
+This example demonstrates:
+- How to parse transaction data from Solana mainnet using RPC
+- Event parsing for multiple protocols (PumpFun, PumpSwap, Bonk, Raydium CPMM/CLMM)
+- Transaction details extraction including fees, logs, and compute units
+
+The example uses a predefined transaction signature and shows how to extract protocol-specific events from the transaction data.
 
 ### Advanced Usage with Batch Processing and Backpressure
 
@@ -61,7 +76,10 @@ use solana_streamer_sdk::{
     streaming::{
         event_parser::{
             protocols::{
-                bonk::{parser::BONK_PROGRAM_ID, BonkPoolCreateEvent, BonkTradeEvent},
+                bonk::{
+                    parser::BONK_PROGRAM_ID, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent,
+                    BonkPoolCreateEvent, BonkTradeEvent,
+                },
                 pumpfun::{parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunTradeEvent},
                 pumpswap::{
                     parser::PUMPSWAP_PROGRAM_ID, PumpSwapBuyEvent, PumpSwapCreatePoolEvent,
@@ -70,11 +88,10 @@ use solana_streamer_sdk::{
                 raydium_clmm::{
                     parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
                 },
-                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent},
+                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent}, BlockMetaEvent,
             },
             Protocol, UnifiedEvent,
-        },
-        ShredStreamGrpc, YellowstoneGrpc,
+        }, grpc::ClientConfig, shred_stream::ShredClientConfig, ShredStreamGrpc, YellowstoneGrpc
     },
 };
 
@@ -104,9 +121,11 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         config,
     )?;
 
+    println!("GRPC client created successfully");
+
     let callback = create_event_callback();
 
-    // Configure protocols to monitor
+    // Will try to parse corresponding protocol events from transactions
     let protocols = vec![
         Protocol::PumpFun,
         Protocol::PumpSwap,
@@ -115,7 +134,9 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumClmm,
     ];
 
-    // Configure account filtering
+    println!("Protocols to monitor: {:?}", protocols);
+
+    // Filter accounts
     let account_include = vec![
         PUMPFUN_PROGRAM_ID.to_string(),      // Monitor pumpfun program ID
         PUMPSWAP_PROGRAM_ID.to_string(),     // Monitor pumpswap program ID
@@ -129,11 +150,10 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting to listen for events, press Ctrl+C to stop...");
     println!("Monitoring programs: {:?}", account_include);
-    
+
     println!("Starting subscription...");
-    
-    // Subscribe with automatic performance monitoring
-    grpc.subscribe_events_v2(
+
+    grpc.subscribe_events_immediate(
         protocols,
         None,
         account_include,
@@ -167,11 +187,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("Listening for events, press Ctrl+C to stop...");
-    
-    // Subscribe with automatic performance monitoring
-    shred_stream
-        .shredstream_subscribe(protocols, None, callback)
-        .await?;
+    shred_stream.shredstream_subscribe(protocols, None, callback).await?;
 
     Ok(())
 }
@@ -180,13 +196,16 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
+            BlockMetaEvent => |e: BlockMetaEvent| {
+                println!("BlockMetaEvent: {e:?}");
+            },
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // When using grpc, you can get block_time from each event
                 println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
                 println!("BonkPoolCreateEvent: {:?}", e.base_mint_param.symbol);
             },
             BonkTradeEvent => |e: BonkTradeEvent| {
-                println!("BonkTradeEvent: {:?}", e);
+                println!("BonkTradeEvent: {e:?}");
             },
             BonkMigrateToAmmEvent => |e: BonkMigrateToAmmEvent| {
                 println!("BonkMigrateToAmmEvent: {e:?}");
@@ -195,34 +214,34 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
                 println!("BonkMigrateToCpswapEvent: {e:?}");
             },
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
-                println!("PumpFunTradeEvent: {:?}", e);
+                println!("PumpFunTradeEvent: {e:?}");
             },
             PumpFunCreateTokenEvent => |e: PumpFunCreateTokenEvent| {
-                println!("PumpFunCreateTokenEvent: {:?}", e);
+                println!("PumpFunCreateTokenEvent: {e:?}");
             },
             PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
-                println!("Buy event: {:?}", e);
+                println!("Buy event: {e:?}");
             },
             PumpSwapSellEvent => |e: PumpSwapSellEvent| {
-                println!("Sell event: {:?}", e);
+                println!("Sell event: {e:?}");
             },
             PumpSwapCreatePoolEvent => |e: PumpSwapCreatePoolEvent| {
-                println!("CreatePool event: {:?}", e);
+                println!("CreatePool event: {e:?}");
             },
             PumpSwapDepositEvent => |e: PumpSwapDepositEvent| {
-                println!("Deposit event: {:?}", e);
+                println!("Deposit event: {e:?}");
             },
             PumpSwapWithdrawEvent => |e: PumpSwapWithdrawEvent| {
-                println!("Withdraw event: {:?}", e);
+                println!("Withdraw event: {e:?}");
             },
             RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
-                println!("RaydiumCpmmSwapEvent: {:?}", e);
+                println!("RaydiumCpmmSwapEvent: {e:?}");
             },
             RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
-                println!("RaydiumClmmSwapEvent: {:?}", e);
+                println!("RaydiumClmmSwapEvent: {e:?}");
             },
             RaydiumClmmSwapV2Event => |e: RaydiumClmmSwapV2Event| {
-                println!("RaydiumClmmSwapV2Event: {:?}", e);
+                println!("RaydiumClmmSwapV2Event: {e:?}");
             }
         });
     }
@@ -309,7 +328,6 @@ MIT License
 1. **Network Stability**: Ensure stable network connection for continuous event streaming
 2. **Rate Limiting**: Be aware of rate limits on public gRPC endpoints
 3. **Error Recovery**: Implement proper error handling and reconnection logic
-4. **Resource Management**: Monitor memory and CPU usage for long-running streams
 5. **Compliance**: Ensure compliance with relevant laws and regulations
 
 ## Language Versions

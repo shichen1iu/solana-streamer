@@ -15,13 +15,10 @@ use solana_streamer_sdk::{
                 raydium_clmm::{
                     parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
                 },
-                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent},
+                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent}, BlockMetaEvent,
             },
             Protocol, UnifiedEvent,
-        },
-        ShredStreamGrpc, YellowstoneGrpc,
-        yellowstone_grpc::ClientConfig,
-        shred_stream::ShredClientConfig,
+        }, grpc::ClientConfig, shred_stream::ShredClientConfig, ShredStreamGrpc, YellowstoneGrpc
     },
 };
 
@@ -77,7 +74,7 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting subscription...");
 
-    grpc.subscribe_events_v2(
+    grpc.subscribe_events_immediate(
         protocols,
         None,
         account_include,
@@ -120,6 +117,9 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
+            BlockMetaEvent => |e: BlockMetaEvent| {
+                println!("BlockMetaEvent: {e:?}");
+            },
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // When using grpc, you can get block_time from each event
                 println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);

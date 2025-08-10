@@ -2,8 +2,26 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::UiInstruction;
-use std::{hash::{DefaultHasher, Hash, Hasher}, sync::Arc};
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::Mutex;
+
+use crate::{
+    match_event,
+    streaming::event_parser::{
+        protocols::{
+            bonk::BonkTradeEvent,
+            pumpfun::PumpFunTradeEvent,
+            pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent},
+            raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event},
+            raydium_cpmm::RaydiumCpmmSwapEvent,
+        },
+        UnifiedEvent,
+    },
+};
 
 // Object pool size configuration
 const EVENT_METADATA_POOL_SIZE: usize = 1000;
@@ -22,9 +40,7 @@ impl Default for EventMetadataPool {
 
 impl EventMetadataPool {
     pub fn new() -> Self {
-        Self {
-            pool: Arc::new(Mutex::new(Vec::with_capacity(EVENT_METADATA_POOL_SIZE))),
-        }
+        Self { pool: Arc::new(Mutex::new(Vec::with_capacity(EVENT_METADATA_POOL_SIZE))) }
     }
 
     pub async fn acquire(&self) -> Option<EventMetadata> {
@@ -53,9 +69,7 @@ impl Default for TransferDataPool {
 
 impl TransferDataPool {
     pub fn new() -> Self {
-        Self {
-            pool: Arc::new(Mutex::new(Vec::with_capacity(TRANSFER_DATA_POOL_SIZE))),
-        }
+        Self { pool: Arc::new(Mutex::new(Vec::with_capacity(TRANSFER_DATA_POOL_SIZE))) }
     }
 
     pub async fn acquire(&self) -> Option<TransferData> {
@@ -87,7 +101,7 @@ pub enum ProtocolType {
     Bonk,
     RaydiumCpmm,
     RaydiumClmm,
-    SDKSystem,
+    Common,
 }
 
 /// Event type enumeration
@@ -126,7 +140,7 @@ pub enum EventType {
     RaydiumClmmSwapV2,
 
     // Common events
-    SDKSystem,
+    BlockMeta,
     Unknown,
 }
 
@@ -153,7 +167,7 @@ impl EventType {
             EventType::RaydiumCpmmSwapBaseOutput => "RaydiumCpmmSwapBaseOutput".to_string(),
             EventType::RaydiumClmmSwap => "RaydiumClmmSwap".to_string(),
             EventType::RaydiumClmmSwapV2 => "RaydiumClmmSwapV2".to_string(),
-            EventType::SDKSystem => "SDKSystem".to_string(),
+            EventType::BlockMeta => "BlockMeta".to_string(),
             EventType::Unknown => "Unknown".to_string(),
         }
     }
@@ -169,19 +183,11 @@ pub struct ParseResult<T> {
 
 impl<T> ParseResult<T> {
     pub fn success(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
+        Self { success: true, data: Some(data), error: None }
     }
 
     pub fn failure(error: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(error),
-        }
+        Self { success: false, data: None, error: Some(error) }
     }
 
     pub fn is_success(&self) -> bool {
@@ -224,6 +230,17 @@ pub struct TransferData {
     pub mint: Option<Pubkey>,
 }
 
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct SwapData {
+    pub from_mint: Pubkey,
+    pub to_mint: Pubkey,
+    pub from_amount: u64,
+    pub to_amount: u64,
+    pub description: Option<String>,
+}
+
 /// Event metadata
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
@@ -240,6 +257,7 @@ pub struct EventMetadata {
     pub event_type: EventType,
     pub program_id: Pubkey,
     pub transfer_datas: Vec<TransferData>,
+    pub swap_data: Option<SwapData>,
     pub index: String,
 }
 
@@ -269,54 +287,9 @@ impl EventMetadata {
             event_type,
             program_id,
             transfer_datas: Vec::with_capacity(4), // Pre-allocate capacity
+            swap_data: None,
             index,
         }
-    }
-
-    /// Create EventMetadata using object pool
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new_with_pool(
-        id: String,
-        signature: String,
-        slot: u64,
-        block_time: i64,
-        block_time_ms: i64,
-        protocol: ProtocolType,
-        event_type: EventType,
-        program_id: Pubkey,
-        index: String,
-        program_received_time_ms: i64,
-    ) -> Self {
-        // Try to get from object pool
-        if let Some(mut metadata) = EVENT_METADATA_POOL.acquire().await {
-            metadata.id = id;
-            metadata.signature = signature;
-            metadata.slot = slot;
-            metadata.block_time = block_time;
-            metadata.block_time_ms = block_time_ms;
-            metadata.program_received_time_ms = program_received_time_ms;
-            metadata.program_handle_time_consuming_ms = 0;
-            metadata.protocol = protocol;
-            metadata.event_type = event_type;
-            metadata.program_id = program_id;
-            metadata.index = index;
-            metadata.transfer_datas.clear();
-            return metadata;
-        }
-        
-        // If object pool is empty, create new one
-        Self::new(
-            id,
-            signature,
-            slot,
-            block_time,
-            block_time_ms,
-            protocol,
-            event_type,
-            program_id,
-            index,
-            program_received_time_ms,
-        )
     }
 
     pub fn set_id(&mut self, id: String) {
@@ -327,8 +300,13 @@ impl EventMetadata {
         self.id = format!("{:x}", hash_value);
     }
 
-    pub fn set_transfer_datas(&mut self, transfer_datas: Vec<TransferData>) {
+    pub fn set_transfer_datas(
+        &mut self,
+        transfer_datas: Vec<TransferData>,
+        swap_data: Option<SwapData>,
+    ) {
         self.transfer_datas = transfer_datas;
+        self.swap_data = swap_data;
     }
 
     /// Recycle EventMetadata to object pool
@@ -339,11 +317,12 @@ impl EventMetadata {
 
 /// Parse token transfer data from next instructions
 pub fn parse_transfer_datas_from_next_instructions(
+    event: Box<dyn UnifiedEvent>,
     inner_instruction: &solana_transaction_status::UiInnerInstructions,
     current_index: i8,
     accounts: &[Pubkey],
     event_type: EventType,
-) -> Vec<TransferData> {
+) -> (Vec<TransferData>, Option<SwapData>) {
     let take = match event_type {
         EventType::PumpFunBuy => 4,
         EventType::PumpFunSell => 1,
@@ -360,7 +339,7 @@ pub fn parse_transfer_datas_from_next_instructions(
         _ => 0,
     };
     if take == 0 {
-        return vec![];
+        return (vec![], None);
     }
     let mut transfer_datas = vec![];
     // Get the next two instructions after the current instruction
@@ -377,11 +356,8 @@ pub fn parse_transfer_datas_from_next_instructions(
                 // Token Program: transferChecked
                 // Token 2022 Program: transferChecked
                 if data[0] == 12 {
-                    let account_pubkeys: Vec<Pubkey> = compiled
-                        .accounts
-                        .iter()
-                        .map(|a| accounts[*a as usize])
-                        .collect();
+                    let account_pubkeys: Vec<Pubkey> =
+                        compiled.accounts.iter().map(|a| accounts[*a as usize]).collect();
                     if account_pubkeys.len() < 4 {
                         continue;
                     }
@@ -406,11 +382,8 @@ pub fn parse_transfer_datas_from_next_instructions(
                 }
                 // Token Program: transfer
                 else if data[0] == 3 {
-                    let account_pubkeys: Vec<Pubkey> = compiled
-                        .accounts
-                        .iter()
-                        .map(|a| accounts[*a as usize])
-                        .collect();
+                    let account_pubkeys: Vec<Pubkey> =
+                        compiled.accounts.iter().map(|a| accounts[*a as usize]).collect();
                     if account_pubkeys.len() < 3 {
                         continue;
                     }
@@ -430,11 +403,8 @@ pub fn parse_transfer_datas_from_next_instructions(
                 }
                 //System Program: transfer
                 else if data[0] == 2 {
-                    let account_pubkeys: Vec<Pubkey> = compiled
-                        .accounts
-                        .iter()
-                        .map(|a| accounts[*a as usize])
-                        .collect();
+                    let account_pubkeys: Vec<Pubkey> =
+                        compiled.accounts.iter().map(|a| accounts[*a as usize]).collect();
                     if account_pubkeys.len() < 2 {
                         continue;
                     }
@@ -454,5 +424,111 @@ pub fn parse_transfer_datas_from_next_instructions(
             }
         }
     }
-    transfer_datas
+    let mut swap_data: SwapData = SwapData {
+        from_mint: Pubkey::default(),
+        to_mint: Pubkey::default(),
+        from_amount: 0,
+        to_amount: 0,
+        description: None,
+    };
+    let sol_mint = Pubkey::from_str("So11111111111111111111111111111111111111111").unwrap();
+    if transfer_datas.len() > 0 {
+        let mut user: Option<Pubkey> = None;
+        let mut from_mint: Option<Pubkey> = None;
+        let mut to_mint: Option<Pubkey> = None;
+        let mut user_from_token: Option<Pubkey> = None;
+        let mut user_to_token: Option<Pubkey> = None;
+        let mut from_vault: Option<Pubkey> = None;
+        let mut to_vault: Option<Pubkey> = None;
+        match_event!(event, {
+            BonkTradeEvent => |e: BonkTradeEvent| {
+                user = Some(e.payer);
+                from_mint = Some(e.base_token_mint);
+                to_mint = Some(e.quote_token_mint);
+                user_from_token = Some(e.user_base_token);
+                user_to_token = Some(e.user_quote_token);
+                from_vault = Some(e.base_vault);
+                to_vault = Some(e.quote_vault);
+            },
+            PumpFunTradeEvent => |e: PumpFunTradeEvent| {
+                swap_data.from_mint = if e.is_buy {
+                    sol_mint
+                } else {
+                    e.mint
+                };
+                swap_data.to_mint = if e.is_buy {
+                    e.mint
+                } else {
+                    sol_mint
+                };
+            },
+            PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
+                swap_data.from_mint = e.quote_mint;
+                swap_data.to_mint = e.base_mint;
+            },
+            PumpSwapSellEvent => |e: PumpSwapSellEvent| {
+                swap_data.from_mint = e.base_mint;
+                swap_data.to_mint = e.quote_mint;
+            },
+            RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
+                user = Some(e.payer);
+                from_mint = Some(e.input_token_mint);
+                to_mint = Some(e.output_token_mint);
+                user_from_token = Some(e.input_token_account);
+                user_to_token = Some(e.output_token_account);
+                from_vault = Some(e.input_vault);
+                to_vault = Some(e.output_vault);
+            },
+            RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
+                user = Some(e.payer);
+                swap_data.description = Some("Unable to get from_mint and to_mint from RaydiumClmmSwapEvent".to_string());
+                user_from_token = Some(e.input_token_account);
+                user_to_token = Some(e.output_token_account);
+                from_vault = Some(e.input_vault);
+                to_vault = Some(e.output_vault);
+            },
+            RaydiumClmmSwapV2Event => |e: RaydiumClmmSwapV2Event| {
+                user = Some(e.payer);
+                from_mint = Some(e.input_vault_mint);
+                to_mint = Some(e.output_vault_mint);
+                user_from_token = Some(e.input_token_account);
+                user_to_token = Some(e.output_token_account);
+                from_vault = Some(e.input_vault);
+                to_vault = Some(e.output_vault);
+            }
+        });
+
+        for transfer_data in transfer_datas.clone() {
+            if transfer_data.source == user_to_token.unwrap_or_default()
+                && transfer_data.destination == to_vault.unwrap_or_default()
+            {
+                swap_data.from_mint = to_mint.unwrap_or_default();
+                swap_data.from_amount = transfer_data.amount;
+            } else if transfer_data.source == from_vault.unwrap_or_default()
+                && transfer_data.destination == user_from_token.unwrap_or_default()
+            {
+                swap_data.to_mint = from_mint.unwrap_or_default();
+                swap_data.to_amount = transfer_data.amount;
+            } else if transfer_data.source == user_from_token.unwrap_or_default()
+                && transfer_data.destination == from_vault.unwrap_or_default()
+            {
+                swap_data.from_mint = from_mint.unwrap_or_default();
+                swap_data.from_amount = transfer_data.amount;
+            } else if transfer_data.source == to_vault.unwrap_or_default()
+                && transfer_data.destination == user_to_token.unwrap_or_default()
+            {
+                swap_data.to_mint = to_mint.unwrap_or_default();
+                swap_data.to_amount = transfer_data.amount;
+            }
+        }
+    }
+    if swap_data.from_mint != Pubkey::default()
+        || swap_data.to_mint != Pubkey::default()
+        || swap_data.from_amount != 0
+        || swap_data.to_amount != 0
+    {
+        (transfer_datas, Some(swap_data))
+    } else {
+        (transfer_datas, None)
+    }
 }
