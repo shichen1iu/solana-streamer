@@ -14,6 +14,7 @@
    - **Bonk**: 代币发布平台事件 (letsbonk.fun)
    - **Raydium CPMM**: Raydium 集中池做市商事件
    - **Raydium CLMM**: Raydium 集中流动性做市商事件
+   - **Raydium AMM V4**: Raydium 自动做市商 V4 事件
 5. **统一事件接口**: 在所有支持的协议中保持一致的事件处理
 6. **事件解析系统**: 自动解析和分类协议特定事件
 7. **高性能**: 针对低延迟事件处理进行优化
@@ -41,14 +42,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.2.0" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.2.1" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = "0.2.0"
+solana-streamer-sdk = "0.2.1"
 ```
 
 ## 使用示例
@@ -63,7 +64,7 @@ cargo run --example parse_tx_events
 
 该示例演示了：
 - 如何使用 RPC 从 Solana 主网解析交易数据
-- 多协议事件解析（PumpFun、PumpSwap、Bonk、Raydium CPMM/CLMM）
+- 多协议事件解析（PumpFun、PumpSwap、Bonk、Raydium CPMM/CLMM/AMM V4）
 - 交易详情提取，包括费用、日志和计算单元
 
 该示例使用预定义的交易签名，展示如何从交易数据中提取协议特定的事件。
@@ -80,18 +81,36 @@ use solana_streamer_sdk::{
                     parser::BONK_PROGRAM_ID, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent,
                     BonkPoolCreateEvent, BonkTradeEvent,
                 },
-                pumpfun::{parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunTradeEvent},
+                pumpfun::{
+                    parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunMigrateEvent,
+                    PumpFunTradeEvent,
+                },
                 pumpswap::{
                     parser::PUMPSWAP_PROGRAM_ID, PumpSwapBuyEvent, PumpSwapCreatePoolEvent,
                     PumpSwapDepositEvent, PumpSwapSellEvent, PumpSwapWithdrawEvent,
                 },
-                raydium_clmm::{
-                    parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
+                raydium_amm_v4::{
+                    RaydiumAmmV4DepositEvent, RaydiumAmmV4Initialize2Event, RaydiumAmmV4SwapEvent,
+                    RaydiumAmmV4WithdrawEvent, RaydiumAmmV4WithdrawPnlEvent,
                 },
-                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent}, BlockMetaEvent,
+                raydium_clmm::{
+                    parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmClosePositionEvent,
+                    RaydiumClmmCreatePoolEvent, RaydiumClmmDecreaseLiquidityV2Event,
+                    RaydiumClmmIncreaseLiquidityV2Event, RaydiumClmmOpenPositionV2Event,
+                    RaydiumClmmOpenPositionWithToken22NftEvent, RaydiumClmmSwapEvent,
+                    RaydiumClmmSwapV2Event,
+                },
+                raydium_cpmm::{
+                    parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmDepositEvent,
+                    RaydiumCpmmInitializeEvent, RaydiumCpmmSwapEvent, RaydiumCpmmWithdrawEvent,
+                },
+                BlockMetaEvent,
             },
             Protocol, UnifiedEvent,
-        }, grpc::ClientConfig, shred_stream::ShredClientConfig, ShredStreamGrpc, YellowstoneGrpc
+        },
+        grpc::ClientConfig,
+        shred_stream::ShredClientConfig,
+        ShredStreamGrpc, YellowstoneGrpc,
     },
 };
 
@@ -138,7 +157,6 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
         BONK_PROGRAM_ID.to_string(),         // 监听 bonk 程序ID
         RAYDIUM_CPMM_PROGRAM_ID.to_string(), // 监听 raydium_cpmm 程序ID
         RAYDIUM_CLMM_PROGRAM_ID.to_string(), // 监听 raydium_clmm 程序ID
-        "xxxxxxxx".to_string(),              // 监听 xxxxx 账号
     ];
     let account_exclude = vec![];
     let account_required = vec![];
@@ -179,6 +197,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::Bonk,
         Protocol::RaydiumCpmm,
         Protocol::RaydiumClmm,
+        Protocol::RaydiumAmmV4,
     ];
 
     println!("Listening for events, press Ctrl+C to stop...");
@@ -191,9 +210,11 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
+            // block meta
             BlockMetaEvent => |e: BlockMetaEvent| {
                 println!("BlockMetaEvent: {e:?}");
             },
+            // bonk
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // 使用grpc的时候，可以从每个事件中获取到block_time
                 println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
@@ -208,12 +229,17 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             BonkMigrateToCpswapEvent => |e: BonkMigrateToCpswapEvent| {
                 println!("BonkMigrateToCpswapEvent: {e:?}");
             },
+            // pumpfun
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
                 println!("PumpFunTradeEvent: {e:?}");
+            },
+            PumpFunMigrateEvent => |e: PumpFunMigrateEvent| {
+                println!("PumpFunMigrateEvent: {e:?}");
             },
             PumpFunCreateTokenEvent => |e: PumpFunCreateTokenEvent| {
                 println!("PumpFunCreateTokenEvent: {e:?}");
             },
+            // pumpswap
             PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
                 println!("Buy event: {e:?}");
             },
@@ -229,15 +255,60 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             PumpSwapWithdrawEvent => |e: PumpSwapWithdrawEvent| {
                 println!("Withdraw event: {e:?}");
             },
+            // raydium_cpmm
             RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
                 println!("RaydiumCpmmSwapEvent: {e:?}");
             },
+            RaydiumCpmmDepositEvent => |e: RaydiumCpmmDepositEvent| {
+                println!("RaydiumCpmmDepositEvent: {e:?}");
+            },
+            RaydiumCpmmInitializeEvent => |e: RaydiumCpmmInitializeEvent| {
+                println!("RaydiumCpmmInitializeEvent: {e:?}");
+            },
+            RaydiumCpmmWithdrawEvent => |e: RaydiumCpmmWithdrawEvent| {
+                println!("RaydiumCpmmWithdrawEvent: {e:?}");
+            },
+            // raydium_clmm
             RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
                 println!("RaydiumClmmSwapEvent: {e:?}");
             },
             RaydiumClmmSwapV2Event => |e: RaydiumClmmSwapV2Event| {
                 println!("RaydiumClmmSwapV2Event: {e:?}");
-            }
+            },
+            RaydiumClmmClosePositionEvent => |e: RaydiumClmmClosePositionEvent| {
+                println!("RaydiumClmmClosePositionEvent: {e:?}");
+            },
+            RaydiumClmmDecreaseLiquidityV2Event => |e: RaydiumClmmDecreaseLiquidityV2Event| {
+                println!("RaydiumClmmDecreaseLiquidityV2Event: {e:?}");
+            },
+            RaydiumClmmCreatePoolEvent => |e: RaydiumClmmCreatePoolEvent| {
+                println!("RaydiumClmmCreatePoolEvent: {e:?}");
+            },
+            RaydiumClmmIncreaseLiquidityV2Event => |e: RaydiumClmmIncreaseLiquidityV2Event| {
+                println!("RaydiumClmmIncreaseLiquidityV2Event: {e:?}");
+            },
+            RaydiumClmmOpenPositionWithToken22NftEvent => |e: RaydiumClmmOpenPositionWithToken22NftEvent| {
+                println!("RaydiumClmmOpenPositionWithToken22NftEvent: {e:?}");
+            },
+            RaydiumClmmOpenPositionV2Event => |e: RaydiumClmmOpenPositionV2Event| {
+                println!("RaydiumClmmOpenPositionV2Event: {e:?}");
+            },
+            // raydium_amm_v4
+            RaydiumAmmV4SwapEvent => |e: RaydiumAmmV4SwapEvent| {
+                println!("RaydiumAmmV4SwapEvent: {e:?}");
+            },
+            RaydiumAmmV4DepositEvent => |e: RaydiumAmmV4DepositEvent| {
+                println!("RaydiumAmmV4DepositEvent: {e:?}");
+            },
+            RaydiumAmmV4Initialize2Event => |e: RaydiumAmmV4Initialize2Event| {
+                println!("RaydiumAmmV4Initialize2Event: {e:?}");
+            },
+            RaydiumAmmV4WithdrawEvent => |e: RaydiumAmmV4WithdrawEvent| {
+                println!("RaydiumAmmV4WithdrawEvent: {e:?}");
+            },
+            RaydiumAmmV4WithdrawPnlEvent => |e: RaydiumAmmV4WithdrawPnlEvent| {
+                println!("RaydiumAmmV4WithdrawPnlEvent: {e:?}");
+            },
         });
     }
 }
@@ -250,6 +321,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
 - **Bonk**: 代币发布平台 (letsbonk.fun)
 - **Raydium CPMM**: Raydium 集中池做市商协议
 - **Raydium CLMM**: Raydium 集中流动性做市商协议
+- **Raydium AMM V4**: Raydium 自动做市商 V4 协议
 
 ## 事件流服务
 
@@ -290,6 +362,7 @@ src/
 │   │   │   ├── bonk/ # Bonk 事件解析
 │   │   │   ├── pumpfun/ # PumpFun 事件解析
 │   │   │   ├── pumpswap/ # PumpSwap 事件解析
+│   │   │   ├── raydium_amm_v4/ # Raydium AMM V4 事件解析
 │   │   │   ├── raydium_cpmm/ # Raydium CPMM 事件解析
 │   │   │   └── raydium_clmm/ # Raydium CLMM 事件解析
 │   │   └── factory.rs # 解析器工厂

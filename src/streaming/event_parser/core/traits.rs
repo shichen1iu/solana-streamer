@@ -158,7 +158,6 @@ pub trait EventParser: Send + Sync {
                                                 inn,
                                                 -1_i8,
                                                 &accounts,
-                                                event.event_type(),
                                             );
                                         event.set_transfer_datas(transfer_datas, swap_data);
                                     });
@@ -309,7 +308,6 @@ pub trait EventParser: Send + Sync {
                                             &inner_instruction,
                                             index as i8,
                                             &accounts,
-                                            event.event_type(),
                                         );
                                     event.set_transfer_datas(transfer_datas, swap_data);
                                 });
@@ -335,7 +333,6 @@ pub trait EventParser: Send + Sync {
                                             &inner_instruction,
                                             index as i8,
                                             &accounts,
-                                            event.event_type(),
                                         );
                                     event.set_transfer_datas(transfer_datas, swap_data);
                                 });

@@ -10,7 +10,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<()> {
     let signatures = vec![
-        "tb6KxvMAZtctQw2yszKk6QGVuzbv1CAbS5mKK7JjVaeb2i5rCafNHfnqE1PhaWukx79sDYcsoZqbHXRJgPu93w4",
+        "42agNk1heHabNAVRzEKqQEt5adGkQzRYf9M1Q81uBJPCCHyP4cyCA1RNkgxXrtEAWeeGcytyh2TsnkBDgqnHeq4z",
     ];
     // Validate signature format
     let mut valid_signatures = Vec::new();
@@ -93,6 +93,7 @@ async fn get_single_transaction_details(signature_str: &str) -> Result<()> {
                 Protocol::PumpSwap,
                 Protocol::PumpFun,
                 Protocol::RaydiumCpmm,
+                Protocol::RaydiumAmmV4,
             ];
             let parser: Arc<dyn EventParser> = Arc::new(MutilEventParser::new(protocols));
             let start_time = std::time::Instant::now();

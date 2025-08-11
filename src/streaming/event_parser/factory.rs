@@ -3,10 +3,7 @@ use solana_sdk::pubkey::Pubkey;
 use std::{collections::HashMap, sync::{Arc, LazyLock}};
 
 use crate::streaming::event_parser::protocols::{
-    bonk::parser::BONK_PROGRAM_ID, pumpfun::parser::PUMPFUN_PROGRAM_ID,
-    pumpswap::parser::PUMPSWAP_PROGRAM_ID, raydium_cpmm::parser::RAYDIUM_CPMM_PROGRAM_ID,
-    raydium_clmm::parser::RAYDIUM_CLMM_PROGRAM_ID, BonkEventParser, RaydiumCpmmEventParser,
-    RaydiumClmmEventParser,
+    bonk::parser::BONK_PROGRAM_ID, pumpfun::parser::PUMPFUN_PROGRAM_ID, pumpswap::parser::PUMPSWAP_PROGRAM_ID, raydium_amm_v4::parser::RAYDIUM_AMM_V4_PROGRAM_ID, raydium_clmm::parser::RAYDIUM_CLMM_PROGRAM_ID, raydium_cpmm::parser::RAYDIUM_CPMM_PROGRAM_ID, BonkEventParser, RaydiumAmmV4EventParser, RaydiumClmmEventParser, RaydiumCpmmEventParser
 };
 
 use super::{
@@ -22,6 +19,7 @@ pub enum Protocol {
     Bonk,
     RaydiumCpmm,
     RaydiumClmm,
+    RaydiumAmmV4,
 }
 
 impl Protocol {
@@ -32,6 +30,7 @@ impl Protocol {
             Protocol::Bonk => vec![BONK_PROGRAM_ID],
             Protocol::RaydiumCpmm => vec![RAYDIUM_CPMM_PROGRAM_ID],
             Protocol::RaydiumClmm => vec![RAYDIUM_CLMM_PROGRAM_ID],
+            Protocol::RaydiumAmmV4 => vec![RAYDIUM_AMM_V4_PROGRAM_ID],
         }
     }
 }
@@ -44,6 +43,7 @@ impl std::fmt::Display for Protocol {
             Protocol::Bonk => write!(f, "Bonk"),
             Protocol::RaydiumCpmm => write!(f, "RaydiumCpmm"),
             Protocol::RaydiumClmm => write!(f, "RaydiumClmm"),
+            Protocol::RaydiumAmmV4 => write!(f, "RaydiumAmmV4"),
         }
     }
 }
@@ -58,6 +58,7 @@ impl std::str::FromStr for Protocol {
             "bonk" => Ok(Protocol::Bonk),
             "raydiumcpmm" => Ok(Protocol::RaydiumCpmm),
             "raydiumclmm" => Ok(Protocol::RaydiumClmm),
+            "raydiumammv4" => Ok(Protocol::RaydiumAmmV4),
             _ => Err(anyhow!("Unsupported protocol: {}", s)),
         }
     }
@@ -65,12 +66,13 @@ impl std::str::FromStr for Protocol {
 
 static EVENT_PARSERS: LazyLock<HashMap<Protocol, Arc<dyn EventParser>>> = LazyLock::new(|| {
     // 预分配容量，避免动态扩容
-    let mut parsers: HashMap<Protocol, Arc<dyn EventParser>> = HashMap::with_capacity(5);
+    let mut parsers: HashMap<Protocol, Arc<dyn EventParser>> = HashMap::with_capacity(6);
     parsers.insert(Protocol::PumpSwap, Arc::new(PumpSwapEventParser::new()));
     parsers.insert(Protocol::PumpFun, Arc::new(PumpFunEventParser::new()));
     parsers.insert(Protocol::Bonk, Arc::new(BonkEventParser::new()));
     parsers.insert(Protocol::RaydiumCpmm, Arc::new(RaydiumCpmmEventParser::new()));
     parsers.insert(Protocol::RaydiumClmm, Arc::new(RaydiumClmmEventParser::new()));
+    parsers.insert(Protocol::RaydiumAmmV4, Arc::new(RaydiumAmmV4EventParser::new()));
     parsers
 });
 

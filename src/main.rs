@@ -7,18 +7,36 @@ use solana_streamer_sdk::{
                     parser::BONK_PROGRAM_ID, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent,
                     BonkPoolCreateEvent, BonkTradeEvent,
                 },
-                pumpfun::{parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunTradeEvent},
+                pumpfun::{
+                    parser::PUMPFUN_PROGRAM_ID, PumpFunCreateTokenEvent, PumpFunMigrateEvent,
+                    PumpFunTradeEvent,
+                },
                 pumpswap::{
                     parser::PUMPSWAP_PROGRAM_ID, PumpSwapBuyEvent, PumpSwapCreatePoolEvent,
                     PumpSwapDepositEvent, PumpSwapSellEvent, PumpSwapWithdrawEvent,
                 },
-                raydium_clmm::{
-                    parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
+                raydium_amm_v4::{
+                    RaydiumAmmV4DepositEvent, RaydiumAmmV4Initialize2Event, RaydiumAmmV4SwapEvent,
+                    RaydiumAmmV4WithdrawEvent, RaydiumAmmV4WithdrawPnlEvent,
                 },
-                raydium_cpmm::{parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmSwapEvent}, BlockMetaEvent,
+                raydium_clmm::{
+                    parser::RAYDIUM_CLMM_PROGRAM_ID, RaydiumClmmClosePositionEvent,
+                    RaydiumClmmCreatePoolEvent, RaydiumClmmDecreaseLiquidityV2Event,
+                    RaydiumClmmIncreaseLiquidityV2Event, RaydiumClmmOpenPositionV2Event,
+                    RaydiumClmmOpenPositionWithToken22NftEvent, RaydiumClmmSwapEvent,
+                    RaydiumClmmSwapV2Event,
+                },
+                raydium_cpmm::{
+                    parser::RAYDIUM_CPMM_PROGRAM_ID, RaydiumCpmmDepositEvent,
+                    RaydiumCpmmInitializeEvent, RaydiumCpmmSwapEvent, RaydiumCpmmWithdrawEvent,
+                },
+                BlockMetaEvent,
             },
             Protocol, UnifiedEvent,
-        }, grpc::ClientConfig, shred_stream::ShredClientConfig, ShredStreamGrpc, YellowstoneGrpc
+        },
+        grpc::ClientConfig,
+        shred_stream::ShredClientConfig,
+        ShredStreamGrpc, YellowstoneGrpc,
     },
 };
 
@@ -105,6 +123,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::Bonk,
         Protocol::RaydiumCpmm,
         Protocol::RaydiumClmm,
+        Protocol::RaydiumAmmV4,
     ];
 
     println!("Listening for events, press Ctrl+C to stop...");
@@ -117,9 +136,11 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
+            // block meta
             BlockMetaEvent => |e: BlockMetaEvent| {
                 println!("BlockMetaEvent: {e:?}");
             },
+            // bonk
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // When using grpc, you can get block_time from each event
                 println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
@@ -134,12 +155,17 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             BonkMigrateToCpswapEvent => |e: BonkMigrateToCpswapEvent| {
                 println!("BonkMigrateToCpswapEvent: {e:?}");
             },
+            // pumpfun
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
                 println!("PumpFunTradeEvent: {e:?}");
+            },
+            PumpFunMigrateEvent => |e: PumpFunMigrateEvent| {
+                println!("PumpFunMigrateEvent: {e:?}");
             },
             PumpFunCreateTokenEvent => |e: PumpFunCreateTokenEvent| {
                 println!("PumpFunCreateTokenEvent: {e:?}");
             },
+            // pumpswap
             PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
                 println!("Buy event: {e:?}");
             },
@@ -155,15 +181,60 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             PumpSwapWithdrawEvent => |e: PumpSwapWithdrawEvent| {
                 println!("Withdraw event: {e:?}");
             },
+            // raydium_cpmm
             RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
                 println!("RaydiumCpmmSwapEvent: {e:?}");
             },
+            RaydiumCpmmDepositEvent => |e: RaydiumCpmmDepositEvent| {
+                println!("RaydiumCpmmDepositEvent: {e:?}");
+            },
+            RaydiumCpmmInitializeEvent => |e: RaydiumCpmmInitializeEvent| {
+                println!("RaydiumCpmmInitializeEvent: {e:?}");
+            },
+            RaydiumCpmmWithdrawEvent => |e: RaydiumCpmmWithdrawEvent| {
+                println!("RaydiumCpmmWithdrawEvent: {e:?}");
+            },
+            // raydium_clmm
             RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
                 println!("RaydiumClmmSwapEvent: {e:?}");
             },
             RaydiumClmmSwapV2Event => |e: RaydiumClmmSwapV2Event| {
                 println!("RaydiumClmmSwapV2Event: {e:?}");
-            }
+            },
+            RaydiumClmmClosePositionEvent => |e: RaydiumClmmClosePositionEvent| {
+                println!("RaydiumClmmClosePositionEvent: {e:?}");
+            },
+            RaydiumClmmDecreaseLiquidityV2Event => |e: RaydiumClmmDecreaseLiquidityV2Event| {
+                println!("RaydiumClmmDecreaseLiquidityV2Event: {e:?}");
+            },
+            RaydiumClmmCreatePoolEvent => |e: RaydiumClmmCreatePoolEvent| {
+                println!("RaydiumClmmCreatePoolEvent: {e:?}");
+            },
+            RaydiumClmmIncreaseLiquidityV2Event => |e: RaydiumClmmIncreaseLiquidityV2Event| {
+                println!("RaydiumClmmIncreaseLiquidityV2Event: {e:?}");
+            },
+            RaydiumClmmOpenPositionWithToken22NftEvent => |e: RaydiumClmmOpenPositionWithToken22NftEvent| {
+                println!("RaydiumClmmOpenPositionWithToken22NftEvent: {e:?}");
+            },
+            RaydiumClmmOpenPositionV2Event => |e: RaydiumClmmOpenPositionV2Event| {
+                println!("RaydiumClmmOpenPositionV2Event: {e:?}");
+            },
+            // raydium_amm_v4
+            RaydiumAmmV4SwapEvent => |e: RaydiumAmmV4SwapEvent| {
+                println!("RaydiumAmmV4SwapEvent: {e:?}");
+            },
+            RaydiumAmmV4DepositEvent => |e: RaydiumAmmV4DepositEvent| {
+                println!("RaydiumAmmV4DepositEvent: {e:?}");
+            },
+            RaydiumAmmV4Initialize2Event => |e: RaydiumAmmV4Initialize2Event| {
+                println!("RaydiumAmmV4Initialize2Event: {e:?}");
+            },
+            RaydiumAmmV4WithdrawEvent => |e: RaydiumAmmV4WithdrawEvent| {
+                println!("RaydiumAmmV4WithdrawEvent: {e:?}");
+            },
+            RaydiumAmmV4WithdrawPnlEvent => |e: RaydiumAmmV4WithdrawPnlEvent| {
+                println!("RaydiumAmmV4WithdrawPnlEvent: {e:?}");
+            },
         });
     }
 }

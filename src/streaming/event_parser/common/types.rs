@@ -16,6 +16,7 @@ use crate::{
             bonk::BonkTradeEvent,
             pumpfun::PumpFunTradeEvent,
             pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent},
+            raydium_amm_v4::RaydiumAmmV4SwapEvent,
             raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event},
             raydium_cpmm::RaydiumCpmmSwapEvent,
         },
@@ -101,6 +102,7 @@ pub enum ProtocolType {
     Bonk,
     RaydiumCpmm,
     RaydiumClmm,
+    RaydiumAmmV4,
     Common,
 }
 
@@ -121,6 +123,7 @@ pub enum EventType {
     PumpFunCreateToken,
     PumpFunBuy,
     PumpFunSell,
+    PumpFunMigrate,
 
     // Bonk events
     BonkBuyExactIn,
@@ -134,10 +137,27 @@ pub enum EventType {
     // Raydium CPMM events
     RaydiumCpmmSwapBaseInput,
     RaydiumCpmmSwapBaseOutput,
+    RaydiumCpmmDeposit,
+    RaydiumCpmmInitialize,
+    RaydiumCpmmWithdraw,
 
     // Raydium CLMM events
     RaydiumClmmSwap,
     RaydiumClmmSwapV2,
+    RaydiumClmmClosePosition,
+    RaydiumClmmIncreaseLiquidityV2,
+    RaydiumClmmDecreaseLiquidityV2,
+    RaydiumClmmCreatePool,
+    RaydiumClmmOpenPositionWithToken22Nft,
+    RaydiumClmmOpenPositionV2,
+
+    // Raydium AMM V4 events
+    RaydiumAmmV4SwapBaseIn,
+    RaydiumAmmV4SwapBaseOut,
+    RaydiumAmmV4Deposit,
+    RaydiumAmmV4Initialize2,
+    RaydiumAmmV4Withdraw,
+    RaydiumAmmV4WithdrawPnl,
 
     // Common events
     BlockMeta,
@@ -156,6 +176,7 @@ impl EventType {
             EventType::PumpFunCreateToken => "PumpFunCreateToken".to_string(),
             EventType::PumpFunBuy => "PumpFunBuy".to_string(),
             EventType::PumpFunSell => "PumpFunSell".to_string(),
+            EventType::PumpFunMigrate => "PumpFunMigrate".to_string(),
             EventType::BonkBuyExactIn => "BonkBuyExactIn".to_string(),
             EventType::BonkBuyExactOut => "BonkBuyExactOut".to_string(),
             EventType::BonkSellExactIn => "BonkSellExactIn".to_string(),
@@ -165,8 +186,29 @@ impl EventType {
             EventType::BonkMigrateToCpswap => "BonkMigrateToCpswap".to_string(),
             EventType::RaydiumCpmmSwapBaseInput => "RaydiumCpmmSwapBaseInput".to_string(),
             EventType::RaydiumCpmmSwapBaseOutput => "RaydiumCpmmSwapBaseOutput".to_string(),
+            EventType::RaydiumCpmmDeposit => "RaydiumCpmmDeposit".to_string(),
+            EventType::RaydiumCpmmInitialize => "RaydiumCpmmInitialize".to_string(),
+            EventType::RaydiumCpmmWithdraw => "RaydiumCpmmWithdraw".to_string(),
             EventType::RaydiumClmmSwap => "RaydiumClmmSwap".to_string(),
             EventType::RaydiumClmmSwapV2 => "RaydiumClmmSwapV2".to_string(),
+            EventType::RaydiumClmmClosePosition => "RaydiumClmmClosePosition".to_string(),
+            EventType::RaydiumClmmDecreaseLiquidityV2 => {
+                "RaydiumClmmDecreaseLiquidityV2".to_string()
+            }
+            EventType::RaydiumClmmCreatePool => "RaydiumClmmCreatePool".to_string(),
+            EventType::RaydiumClmmIncreaseLiquidityV2 => {
+                "RaydiumClmmIncreaseLiquidityV2".to_string()
+            }
+            EventType::RaydiumClmmOpenPositionWithToken22Nft => {
+                "RaydiumClmmOpenPositionWithToken22Nft".to_string()
+            }
+            EventType::RaydiumClmmOpenPositionV2 => "RaydiumClmmOpenPositionV2".to_string(),
+            EventType::RaydiumAmmV4SwapBaseIn => "RaydiumAmmV4SwapBaseIn".to_string(),
+            EventType::RaydiumAmmV4SwapBaseOut => "RaydiumAmmV4SwapBaseOut".to_string(),
+            EventType::RaydiumAmmV4Deposit => "RaydiumAmmV4Deposit".to_string(),
+            EventType::RaydiumAmmV4Initialize2 => "RaydiumAmmV4Initialize2".to_string(),
+            EventType::RaydiumAmmV4Withdraw => "RaydiumAmmV4Withdraw".to_string(),
+            EventType::RaydiumAmmV4WithdrawPnl => "RaydiumAmmV4WithdrawPnl".to_string(),
             EventType::BlockMeta => "BlockMeta".to_string(),
             EventType::Unknown => "Unknown".to_string(),
         }
@@ -321,37 +363,25 @@ pub fn parse_transfer_datas_from_next_instructions(
     inner_instruction: &solana_transaction_status::UiInnerInstructions,
     current_index: i8,
     accounts: &[Pubkey],
-    event_type: EventType,
 ) -> (Vec<TransferData>, Option<SwapData>) {
-    let take = match event_type {
-        EventType::PumpFunBuy => 4,
-        EventType::PumpFunSell => 1,
-        EventType::PumpSwapBuy => 3,
-        EventType::PumpSwapSell => 3,
-        EventType::BonkBuyExactIn
-        | EventType::BonkBuyExactOut
-        | EventType::BonkSellExactIn
-        | EventType::BonkSellExactOut => 3,
-        EventType::RaydiumCpmmSwapBaseInput
-        | EventType::RaydiumCpmmSwapBaseOutput
-        | EventType::RaydiumClmmSwap
-        | EventType::RaydiumClmmSwapV2 => 2,
-        _ => 0,
-    };
-    if take == 0 {
-        return (vec![], None);
-    }
     let mut transfer_datas = vec![];
     // Get the next two instructions after the current instruction
-    let next_instructions: Vec<&UiInstruction> = inner_instruction
-        .instructions
-        .iter()
-        .skip((current_index + 1) as usize)
-        .take(take)
-        .collect();
+    let next_instructions: Vec<&UiInstruction> =
+        inner_instruction.instructions.iter().skip((current_index + 1) as usize).collect();
 
+    let system_programs = vec![
+        // Token Program
+        Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
+        // Token 2022 Program
+        Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb").unwrap(),
+        // System Program
+        Pubkey::from_str("11111111111111111111111111111111").unwrap(),
+    ];
     for instruction in next_instructions {
         if let UiInstruction::Compiled(compiled) = instruction {
+            if !system_programs.contains(&accounts[compiled.program_id_index as usize]) {
+                break;
+            }
             if let Ok(data) = bs58::decode(compiled.data.clone()).into_vec() {
                 // Token Program: transferChecked
                 // Token 2022 Program: transferChecked
@@ -495,7 +525,15 @@ pub fn parse_transfer_datas_from_next_instructions(
                 user_to_token = Some(e.output_token_account);
                 from_vault = Some(e.input_vault);
                 to_vault = Some(e.output_vault);
-            }
+            },
+            RaydiumAmmV4SwapEvent => |e: RaydiumAmmV4SwapEvent| {
+                user = Some(e.user_source_owner);
+                swap_data.description = Some("Unable to get from_mint and to_mint from RaydiumAmmV4SwapEvent".to_string());
+                user_from_token = Some(e.user_source_token_account);
+                user_to_token = Some(e.user_destination_token_account);
+                from_vault = Some(e.pool_pc_token_account);
+                to_vault = Some(e.pool_coin_token_account);
+            },
         });
 
         for transfer_data in transfer_datas.clone() {
