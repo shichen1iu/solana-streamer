@@ -159,6 +159,22 @@ pub enum EventType {
     RaydiumAmmV4Withdraw,
     RaydiumAmmV4WithdrawPnl,
 
+    // Account events
+    AccountRaydiumAmmV4AmmInfo,
+    AccountPumpSwapGlobalConfig,
+    AccountPumpSwapPool,
+    AccountBonkPoolState,
+    AccountBonkGlobalConfig,
+    AccountBonkPlatformConfig,
+    AccountBonkVestingRecord,
+    AccountPumpFunBondingCurve,
+    AccountPumpFunGlobal,
+    AccountRaydiumClmmAmmConfig,
+    AccountRaydiumClmmPoolState,
+    AccountRaydiumClmmTickArrayState,
+    AccountRaydiumCpmmAmmConfig,
+    AccountRaydiumCpmmPoolState,
+
     // Common events
     BlockMeta,
     Unknown,
@@ -184,6 +200,14 @@ impl EventType {
             EventType::BonkInitialize => "BonkInitialize".to_string(),
             EventType::BonkMigrateToAmm => "BonkMigrateToAmm".to_string(),
             EventType::BonkMigrateToCpswap => "BonkMigrateToCpswap".to_string(),
+            EventType::AccountPumpFunBondingCurve => "AccountPumpFunBondingCurve".to_string(),
+            EventType::AccountPumpFunGlobal => "AccountPumpFunGlobal".to_string(),
+            EventType::AccountPumpSwapGlobalConfig => "AccountPumpSwapGlobalConfig".to_string(),
+            EventType::AccountPumpSwapPool => "AccountPumpSwapPool".to_string(),
+            EventType::AccountBonkPoolState => "AccountBonkPoolState".to_string(),
+            EventType::AccountBonkGlobalConfig => "AccountBonkGlobalConfig".to_string(),
+            EventType::AccountBonkPlatformConfig => "AccountBonkPlatformConfig".to_string(),
+            EventType::AccountBonkVestingRecord => "AccountBonkVestingRecord".to_string(),
             EventType::RaydiumCpmmSwapBaseInput => "RaydiumCpmmSwapBaseInput".to_string(),
             EventType::RaydiumCpmmSwapBaseOutput => "RaydiumCpmmSwapBaseOutput".to_string(),
             EventType::RaydiumCpmmDeposit => "RaydiumCpmmDeposit".to_string(),
@@ -209,6 +233,14 @@ impl EventType {
             EventType::RaydiumAmmV4Initialize2 => "RaydiumAmmV4Initialize2".to_string(),
             EventType::RaydiumAmmV4Withdraw => "RaydiumAmmV4Withdraw".to_string(),
             EventType::RaydiumAmmV4WithdrawPnl => "RaydiumAmmV4WithdrawPnl".to_string(),
+            EventType::AccountRaydiumAmmV4AmmInfo => "AccountRaydiumAmmV4AmmInfo".to_string(),
+            EventType::AccountRaydiumClmmAmmConfig => "AccountRaydiumClmmAmmConfig".to_string(),
+            EventType::AccountRaydiumClmmPoolState => "AccountRaydiumClmmPoolState".to_string(),
+            EventType::AccountRaydiumClmmTickArrayState => {
+                "AccountRaydiumClmmTickArrayState".to_string()
+            }
+            EventType::AccountRaydiumCpmmAmmConfig => "AccountRaydiumCpmmAmmConfig".to_string(),
+            EventType::AccountRaydiumCpmmPoolState => "AccountRaydiumCpmmPoolState".to_string(),
             EventType::BlockMeta => "BlockMeta".to_string(),
             EventType::Unknown => "Unknown".to_string(),
         }

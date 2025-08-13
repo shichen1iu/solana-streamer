@@ -37,8 +37,8 @@ impl PumpFunEventParser {
                 inner_instruction_discriminator: discriminators::CREATE_TOKEN_EVENT,
                 instruction_discriminator: discriminators::CREATE_TOKEN_IX,
                 event_type: EventType::PumpFunCreateToken,
-                inner_instruction_parser: Self::parse_create_token_inner_instruction,
-                instruction_parser: Self::parse_create_token_instruction,
+                inner_instruction_parser: Some(Self::parse_create_token_inner_instruction),
+                instruction_parser: Some(Self::parse_create_token_instruction),
             },
             GenericEventParseConfig {
                 program_id: PUMPFUN_PROGRAM_ID,
@@ -46,8 +46,8 @@ impl PumpFunEventParser {
                 inner_instruction_discriminator: discriminators::TRADE_EVENT,
                 instruction_discriminator: discriminators::BUY_IX,
                 event_type: EventType::PumpFunBuy,
-                inner_instruction_parser: Self::parse_trade_inner_instruction,
-                instruction_parser: Self::parse_buy_instruction,
+                inner_instruction_parser: Some(Self::parse_trade_inner_instruction),
+                instruction_parser: Some(Self::parse_buy_instruction),
             },
             GenericEventParseConfig {
                 program_id: PUMPFUN_PROGRAM_ID,
@@ -55,8 +55,8 @@ impl PumpFunEventParser {
                 inner_instruction_discriminator: discriminators::TRADE_EVENT,
                 instruction_discriminator: discriminators::SELL_IX,
                 event_type: EventType::PumpFunSell,
-                inner_instruction_parser: Self::parse_trade_inner_instruction,
-                instruction_parser: Self::parse_sell_instruction,
+                inner_instruction_parser: Some(Self::parse_trade_inner_instruction),
+                instruction_parser: Some(Self::parse_sell_instruction),
             },
             GenericEventParseConfig {
                 program_id: PUMPFUN_PROGRAM_ID,
@@ -64,8 +64,8 @@ impl PumpFunEventParser {
                 inner_instruction_discriminator: discriminators::COMPLETE_PUMP_AMM_MIGRATION_EVENT,
                 instruction_discriminator: discriminators::MIGRATE_IX,
                 event_type: EventType::PumpFunMigrate,
-                inner_instruction_parser: Self::parse_migrate_inner_instruction,
-                instruction_parser: Self::parse_migrate_instruction,
+                inner_instruction_parser: Some(Self::parse_migrate_inner_instruction),
+                instruction_parser: Some(Self::parse_migrate_instruction),
             },
         ];
 

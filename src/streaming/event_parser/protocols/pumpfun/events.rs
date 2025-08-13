@@ -4,6 +4,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::impl_unified_event;
 use crate::streaming::event_parser::common::EventMetadata;
+use crate::streaming::event_parser::protocols::pumpfun::types::{BondingCurve, Global};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
 pub struct PumpFunCreateTokenEvent {
@@ -177,6 +178,35 @@ impl_unified_event!(
     pool
 );
 
+/// 铸币曲线
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub struct PumpFunBondingCurveAccountEvent {
+    #[borsh(skip)]
+    pub metadata: EventMetadata,
+    pub pubkey: String,
+    pub executable: bool,
+    pub lamports: u64,
+    pub owner: String,
+    pub rent_epoch: u64,
+    pub bonding_curve: BondingCurve,
+}
+
+impl_unified_event!(PumpFunBondingCurveAccountEvent,);
+
+/// 全局配置
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub struct PumpFunGlobalAccountEvent {
+    #[borsh(skip)]
+    pub metadata: EventMetadata,
+    pub pubkey: String,
+    pub executable: bool,
+    pub lamports: u64,
+    pub owner: String,
+    pub rent_epoch: u64,
+    pub global: Global,
+}
+impl_unified_event!(PumpFunGlobalAccountEvent,);
+
 /// 事件鉴别器常量
 pub mod discriminators {
     // 事件鉴别器
@@ -189,4 +219,8 @@ pub mod discriminators {
     pub const BUY_IX: &[u8] = &[102, 6, 61, 18, 1, 218, 235, 234];
     pub const SELL_IX: &[u8] = &[51, 230, 133, 164, 1, 127, 131, 173];
     pub const MIGRATE_IX: &[u8] = &[155, 234, 231, 146, 236, 158, 162, 30];
+
+    // 账户鉴别器
+    pub const BONDING_CURVE_ACCOUNT: &[u8] = &[23, 183, 248, 55, 96, 216, 172, 96];
+    pub const GLOBAL_ACCOUNT: &[u8] = &[167, 232, 232, 177, 200, 108, 114, 127];
 }
