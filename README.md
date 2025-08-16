@@ -44,14 +44,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.3.1" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.3.2" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-solana-streamer-sdk = "0.3.1"
+solana-streamer-sdk = "0.3.2"
 ```
 
 ## Usage Examples
@@ -71,13 +71,14 @@ This example demonstrates:
 
 The example uses a predefined transaction signature and shows how to extract protocol-specific events from the transaction data.
 
-### Advanced Usage with Batch Processing and Backpressure
+### Advanced Usage - Complete Example
 
 ```rust
 use solana_streamer_sdk::{
     match_event,
     streaming::{
         event_parser::{
+            common::{filter::EventTypeFilter, EventType},
             protocols::{
                 bonk::{
                     parser::BONK_PROGRAM_ID, BonkGlobalConfigAccountEvent, BonkMigrateToAmmEvent,
@@ -127,13 +128,8 @@ use solana_streamer_sdk::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Solana Streamer...");
-    
-    // Test Yellowstone gRPC with performance monitoring
     test_grpc().await?;
-    
-    // Test ShredStream with performance monitoring  
     test_shreds().await?;
-    
     Ok(())
 }
 
@@ -178,26 +174,33 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
     let account_exclude = vec![];
     let account_required = vec![];
 
-    println!("Starting to listen for events, press Ctrl+C to stop...");
-    println!("Monitoring programs: {:?}", account_include);
-
-    println!("Starting subscription...");
-
-    // 监听交易数据
+    // Transaction filter for monitoring transaction events
     let transaction_filter = TransactionFilter {
         account_include: account_include.clone(),
         account_exclude,
         account_required,
     };
 
-    // 监听属于owner程序的账号数据 -> 账号事件监听
+    // Account filter for monitoring account state changes
     let account_filter = AccountFilter { account: vec![], owner: account_include.clone() };
+
+    // Event type filtering - optional
+    // No event filtering, includes all events
+    let event_type_filter = None;
+    // Only include PumpSwapBuy and PumpSwapSell events
+    // let event_type_filter = Some(EventTypeFilter { include: vec![EventType::PumpSwapBuy, EventType::PumpSwapSell] });
+
+    println!("Starting to listen for events, press Ctrl+C to stop...");
+    println!("Monitoring programs: {:?}", account_include);
+
+    println!("Starting subscription...");
 
     grpc.subscribe_events_immediate(
         protocols,
         None,
         transaction_filter,
         account_filter,
+        event_type_filter,
         None,
         callback,
     )
@@ -236,11 +239,11 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
         println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
-            // block meta
+            // -------------------------- block meta -----------------------
             BlockMetaEvent => |e: BlockMetaEvent| {
                 println!("BlockMetaEvent: {e:?}");
             },
-            // bonk
+            // -------------------------- bonk -----------------------
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {
                 // When using grpc, you can get block_time from each event
                 println!("block_time: {:?}, block_time_ms: {:?}", e.metadata.block_time, e.metadata.block_time_ms);
@@ -255,7 +258,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             BonkMigrateToCpswapEvent => |e: BonkMigrateToCpswapEvent| {
                 println!("BonkMigrateToCpswapEvent: {e:?}");
             },
-            // pumpfun
+            // -------------------------- pumpfun -----------------------
             PumpFunTradeEvent => |e: PumpFunTradeEvent| {
                 println!("PumpFunTradeEvent: {e:?}");
             },
@@ -265,7 +268,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             PumpFunCreateTokenEvent => |e: PumpFunCreateTokenEvent| {
                 println!("PumpFunCreateTokenEvent: {e:?}");
             },
-            // pumpswap
+            // -------------------------- pumpswap -----------------------
             PumpSwapBuyEvent => |e: PumpSwapBuyEvent| {
                 println!("Buy event: {e:?}");
             },
@@ -281,7 +284,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             PumpSwapWithdrawEvent => |e: PumpSwapWithdrawEvent| {
                 println!("Withdraw event: {e:?}");
             },
-            // raydium_cpmm
+            // -------------------------- raydium_cpmm -----------------------
             RaydiumCpmmSwapEvent => |e: RaydiumCpmmSwapEvent| {
                 println!("RaydiumCpmmSwapEvent: {e:?}");
             },
@@ -294,7 +297,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             RaydiumCpmmWithdrawEvent => |e: RaydiumCpmmWithdrawEvent| {
                 println!("RaydiumCpmmWithdrawEvent: {e:?}");
             },
-            // raydium_clmm
+            // -------------------------- raydium_clmm -----------------------
             RaydiumClmmSwapEvent => |e: RaydiumClmmSwapEvent| {
                 println!("RaydiumClmmSwapEvent: {e:?}");
             },
@@ -319,7 +322,7 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
             RaydiumClmmOpenPositionV2Event => |e: RaydiumClmmOpenPositionV2Event| {
                 println!("RaydiumClmmOpenPositionV2Event: {e:?}");
             },
-            // raydium_amm_v4
+            // -------------------------- raydium_amm_v4 -----------------------
             RaydiumAmmV4SwapEvent => |e: RaydiumAmmV4SwapEvent| {
                 println!("RaydiumAmmV4SwapEvent: {e:?}");
             },
@@ -378,6 +381,22 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
         });
     }
 }
+```
+
+### Event Filtering
+
+The library supports flexible event filtering to reduce processing overhead:
+
+```rust
+use solana_streamer_sdk::streaming::event_parser::common::{filter::EventTypeFilter, EventType};
+
+// No filtering - receive all events
+let event_type_filter = None;
+
+// Filter specific event types - only receive PumpSwap buy/sell events
+let event_type_filter = Some(EventTypeFilter { 
+    include: vec![EventType::PumpSwapBuy, EventType::PumpSwapSell] 
+});
 ```
 
 ## Supported Protocols
