@@ -44,14 +44,14 @@ git clone https://github.com/0xfnzero/solana-streamer
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = { path = "./solana-streamer", version = "0.3.2" }
+solana-streamer-sdk = { path = "./solana-streamer", version = "0.3.3" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-solana-streamer-sdk = "0.3.2"
+solana-streamer-sdk = "0.3.3"
 ```
 
 ## 使用示例
@@ -119,7 +119,7 @@ use solana_streamer_sdk::{
             Protocol, UnifiedEvent,
         },
         grpc::ClientConfig,
-        shred_stream::ShredClientConfig,
+        shred::StreamClientConfig,
         yellowstone_grpc::{AccountFilter, TransactionFilter},
         ShredStreamGrpc, YellowstoneGrpc,
     },
@@ -213,7 +213,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     println!("Subscribing to ShredStream events...");
 
     // 创建低延迟配置
-    let mut config = ShredClientConfig::low_latency();
+    let mut config = StreamClientConfig::low_latency();
     // 启用性能监控, 有性能损耗, 默认关闭
     config.enable_metrics = true;
     let shred_stream =
@@ -229,8 +229,15 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
         Protocol::RaydiumAmmV4,
     ];
 
+    // 事件过滤
+    // 不进行事件过滤，包含所有事件
+    let event_type_filter = None;
+    // 只包含PumpSwapBuy事件、PumpSwapSell事件
+    // let event_type_filter =
+    //     EventTypeFilter { include: vec![EventType::PumpSwapBuy, EventType::PumpSwapSell] };
+
     println!("Listening for events, press Ctrl+C to stop...");
-    shred_stream.shredstream_subscribe(protocols, None, callback).await?;
+    shred_stream.shredstream_subscribe(protocols, None, event_type_filter, callback).await?;
 
     Ok(())
 }
@@ -385,7 +392,9 @@ fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
 
 ### 事件过滤
 
-库支持灵活的事件过滤以减少处理开销：
+库支持灵活的事件过滤以减少处理开销并提升性能：
+
+#### 基础过滤
 
 ```rust
 use solana_streamer_sdk::streaming::event_parser::common::{filter::EventTypeFilter, EventType};
@@ -396,6 +405,47 @@ let event_type_filter = None;
 // 过滤特定事件类型 - 只接收 PumpSwap 买入/卖出事件
 let event_type_filter = Some(EventTypeFilter { 
     include: vec![EventType::PumpSwapBuy, EventType::PumpSwapSell] 
+});
+```
+
+#### 性能影响
+
+事件过滤可以带来显著的性能提升：
+- **减少 60-80%** 的不必要事件处理
+- **降低内存使用** 通过过滤掉无关事件
+- **减少网络带宽** 在分布式环境中
+- **更好的专注性** 只处理对应用有意义的事件
+
+#### 按使用场景的过滤示例
+
+**交易机器人（专注交易事件）**
+```rust
+let event_type_filter = Some(EventTypeFilter { 
+    include: vec![
+        EventType::PumpSwapBuy,
+        EventType::PumpSwapSell,
+        EventType::PumpFunTrade,
+        EventType::RaydiumCpmmSwap,
+        EventType::RaydiumClmmSwap,
+        EventType::RaydiumAmmV4Swap,
+        .....
+    ] 
+});
+```
+
+**池监控（专注流动性事件）**
+```rust
+let event_type_filter = Some(EventTypeFilter { 
+    include: vec![
+        EventType::PumpSwapCreatePool,
+        EventType::PumpSwapDeposit,
+        EventType::PumpSwapWithdraw,
+        EventType::RaydiumCpmmInitialize,
+        EventType::RaydiumCpmmDeposit,
+        EventType::RaydiumCpmmWithdraw,
+        EventType::RaydiumClmmCreatePool,
+        ......
+    ] 
 });
 ```
 
