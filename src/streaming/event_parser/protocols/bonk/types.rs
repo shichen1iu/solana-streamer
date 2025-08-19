@@ -5,7 +5,9 @@ use solana_sdk::pubkey::Pubkey;
 use crate::streaming::{
     event_parser::{
         common::EventMetadata,
-        protocols::bonk::{BonkGlobalConfigAccountEvent, BonkPlatformConfigAccountEvent, BonkPoolStateAccountEvent},
+        protocols::bonk::{
+            BonkGlobalConfigAccountEvent, BonkPlatformConfigAccountEvent, BonkPoolStateAccountEvent,
+        },
         UnifiedEvent,
     },
     grpc::AccountPretty,
@@ -39,6 +41,13 @@ pub struct VestingParams {
     pub total_locked_amount: u64,
     pub cliff_period: u64,
     pub unlock_period: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]
+pub enum AmmFeeOn {
+    #[default]
+    QuoteToken,
+    BothToken,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshDeserialize)]

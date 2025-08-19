@@ -131,6 +131,7 @@ pub enum EventType {
     BonkSellExactIn,
     BonkSellExactOut,
     BonkInitialize,
+    BonkInitializeV2,
     BonkMigrateToAmm,
     BonkMigrateToCpswap,
 
@@ -216,6 +217,7 @@ impl EventType {
             EventType::BonkSellExactIn => "BonkSellExactIn".to_string(),
             EventType::BonkSellExactOut => "BonkSellExactOut".to_string(),
             EventType::BonkInitialize => "BonkInitialize".to_string(),
+            EventType::BonkInitializeV2 => "BonkInitializeV2".to_string(),
             EventType::BonkMigrateToAmm => "BonkMigrateToAmm".to_string(),
             EventType::BonkMigrateToCpswap => "BonkMigrateToCpswap".to_string(),
             EventType::AccountPumpFunBondingCurve => "AccountPumpFunBondingCurve".to_string(),
