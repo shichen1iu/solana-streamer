@@ -343,6 +343,7 @@ pub struct EventMetadata {
     pub id: String,
     pub signature: String,
     pub slot: u64,
+    pub transaction_index: Option<u64>,  // 新增：交易在slot中的索引
     pub block_time: i64,
     pub block_time_ms: i64,
     pub program_received_time_ms: i64,
@@ -352,7 +353,7 @@ pub struct EventMetadata {
     pub program_id: Pubkey,
     pub transfer_datas: Vec<TransferData>,
     pub swap_data: Option<SwapData>,
-    pub index: String,
+    pub index: String,  // 保留原有的指令索引
 }
 
 impl EventMetadata {
@@ -373,6 +374,7 @@ impl EventMetadata {
             id,
             signature,
             slot,
+            transaction_index: None,  // 默认为None，后续设置
             block_time,
             block_time_ms,
             program_received_time_ms,
@@ -401,6 +403,11 @@ impl EventMetadata {
     ) {
         self.transfer_datas = transfer_datas;
         self.swap_data = swap_data;
+    }
+
+    /// 设置交易索引
+    pub fn set_transaction_index(&mut self, transaction_index: Option<u64>) {
+        self.transaction_index = transaction_index;
     }
 
     /// Recycle EventMetadata to object pool
