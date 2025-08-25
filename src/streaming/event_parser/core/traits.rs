@@ -67,6 +67,12 @@ pub trait UnifiedEvent: Debug + Send + Sync {
 
     /// Get index
     fn index(&self) -> String;
+
+    /// Get transaction index in slot
+    fn transaction_index(&self) -> Option<u64>;
+
+    /// Set transaction index in slot
+    fn set_transaction_index(&mut self, transaction_index: Option<u64>);
 }
 
 /// 事件解析器trait - 定义了事件解析的核心方法

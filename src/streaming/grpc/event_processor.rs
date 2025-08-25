@@ -90,7 +90,7 @@ impl EventProcessor {
 
                 // 使用缓存获取解析器
                 let parser = self.get_or_create_parser(protocols.clone(), event_type_filter);
-                let all_events = parser
+                let mut all_events = parser
                     .parse_transaction(
                         transaction_pretty.tx.clone(),
                         &signature,
@@ -104,6 +104,11 @@ impl EventProcessor {
                     )
                     .await
                     .unwrap_or_else(|_e| vec![]);
+
+                // 为所有事件设置交易索引
+                for event in &mut all_events {
+                    event.set_transaction_index(transaction_pretty.transaction_index);
+                }
 
                 // 保存事件数量用于日志记录
                 let event_count = all_events.len();
