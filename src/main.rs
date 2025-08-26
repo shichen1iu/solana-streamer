@@ -188,7 +188,13 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
-        println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
+        println!(
+            "🎉 Event received! Type: {:?}, ID: {}, Slot: {}, Transaction Index: {:?}",
+            event.event_type(),
+            event.id(),
+            event.slot(),
+            event.transaction_index(),
+        );
         match_event!(event, {
             // -------------------------- block meta -----------------------
             BlockMetaEvent => |e: BlockMetaEvent| {

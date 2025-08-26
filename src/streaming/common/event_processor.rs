@@ -113,7 +113,7 @@ impl EventProcessor {
                 let signature = transaction_pretty.signature;
                 // 使用缓存获取解析器
                 let parser = self.get_parser();
-                let all_events = parser
+                let mut all_events = parser
                     .parse_transaction(
                         transaction_pretty.tx.clone(),
                         signature,
@@ -124,6 +124,11 @@ impl EventProcessor {
                     )
                     .await
                     .unwrap_or_else(|_e| vec![]);
+
+                // 为所有事件设置交易索引
+                for event in &mut all_events {
+                    event.set_transaction_index(transaction_pretty.transaction_index);
+                }
 
                 let max_time_consuming_us = all_events
                     .iter()

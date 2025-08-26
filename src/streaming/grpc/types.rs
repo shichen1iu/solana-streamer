@@ -69,6 +69,7 @@ impl fmt::Debug for BlockMetaPretty {
 #[derive(Clone)]
 pub struct TransactionPretty {
     pub slot: u64,
+    pub transaction_index: Option<u64>,  // 新增：交易在slot中的索引
     pub block_hash: String,
     pub block_time: Option<Timestamp>,
     pub signature: Signature,
@@ -81,6 +82,7 @@ impl fmt::Debug for TransactionPretty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TransactionPretty")
             .field("slot", &self.slot)
+            .field("transaction_index", &self.transaction_index)
             .field("signature", &self.signature)
             .field("is_vote", &self.is_vote)
             .field("program_received_time_us", &self.program_received_time_us)
@@ -132,8 +134,11 @@ impl From<(SubscribeUpdateTransaction, Option<Timestamp>)> for TransactionPretty
         ),
     ) -> Self {
         let tx = transaction.expect("should be defined");
+        // 根据用户说明，交易索引在 transaction.index 中
+        let transaction_index = tx.index;
         Self {
             slot,
+            transaction_index: Some(transaction_index),  // 提取交易索引
             block_time,
             block_hash: "".to_string(),
             signature: Signature::try_from(tx.signature.as_slice()).expect("valid signature"),
