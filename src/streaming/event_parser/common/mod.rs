@@ -2,6 +2,8 @@ pub mod types;
 pub mod utils;
 pub mod filter;
 
+pub const EMPTY_ID: &str = "";
+
 /// 自动生成UnifiedEvent trait实现的宏
 #[macro_export]
 macro_rules! impl_unified_event {
@@ -10,6 +12,10 @@ macro_rules! impl_unified_event {
         impl $crate::streaming::event_parser::core::traits::UnifiedEvent for $struct_name {
             fn id(&self) -> &str {
                 &self.metadata.id
+            }
+
+            fn clear_id(&mut self) {
+                self.metadata.id = $crate::streaming::event_parser::common::EMPTY_ID.to_string();
             }
 
             fn event_type(&self) -> $crate::streaming::event_parser::common::types::EventType {
@@ -24,16 +30,16 @@ macro_rules! impl_unified_event {
                 self.metadata.slot
             }
 
-            fn program_received_time_ms(&self) -> i64 {
-                self.metadata.program_received_time_ms
+            fn program_received_time_us(&self) -> i64 {
+                self.metadata.program_received_time_us
             }
 
-            fn program_handle_time_consuming_ms(&self) -> i64 {
-                self.metadata.program_handle_time_consuming_ms
+            fn program_handle_time_consuming_us(&self) -> i64 {
+                self.metadata.program_handle_time_consuming_us
             }
 
-            fn set_program_handle_time_consuming_ms(&mut self, program_handle_time_consuming_ms: i64) {
-                self.metadata.program_handle_time_consuming_ms = program_handle_time_consuming_ms;
+            fn set_program_handle_time_consuming_us(&mut self, program_handle_time_consuming_us: i64) {
+                self.metadata.program_handle_time_consuming_us = program_handle_time_consuming_us;
             }
 
             fn as_any(&self) -> &dyn std::any::Any {
@@ -56,8 +62,8 @@ macro_rules! impl_unified_event {
                 }
             }
 
-            fn set_transfer_datas(&mut self, transfer_datas: Vec<$crate::streaming::event_parser::common::types::TransferData>, swap_data: Option<$crate::streaming::event_parser::common::types::SwapData>) {
-                self.metadata.set_transfer_datas(transfer_datas, swap_data);
+            fn set_swap_data(&mut self, swap_data: $crate::streaming::event_parser::common::types::SwapData) {
+                self.metadata.set_swap_data(swap_data);
             }
 
             fn index(&self) -> String {

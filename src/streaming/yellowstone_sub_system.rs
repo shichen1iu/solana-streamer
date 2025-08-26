@@ -9,7 +9,7 @@ use futures::{channel::mpsc, StreamExt};
 use log::error;
 use solana_program::pubkey;
 use solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction};
-use solana_transaction_status::EncodedTransactionWithStatusMeta;
+use solana_transaction_status::TransactionWithStatusMeta;
 
 const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
 // 根据实际并发量调整通道大小，避免背压
@@ -93,20 +93,19 @@ impl YellowstoneGrpc {
     {
         match event_pretty {
             EventPretty::Transaction(transaction_pretty) => {
-                let trade_raw: EncodedTransactionWithStatusMeta = transaction_pretty.tx;
-                let meta = trade_raw
-                    .meta
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Missing transaction metadata"))?;
+                let trade_raw: TransactionWithStatusMeta = transaction_pretty.tx;
+                let meta = trade_raw.get_status_meta();
 
-                if meta.err.is_some() {
+                if meta.is_none() {
                     return Ok(());
                 }
+
+                let transaction = trade_raw.get_transaction();
 
                 callback(SystemEvent::NewTransfer(TransferInfo {
                     slot: transaction_pretty.slot,
                     signature: transaction_pretty.signature.to_string(),
-                    tx: trade_raw.transaction.decode(),
+                    tx: Some(transaction),
                 }));
             }
             _ => {}

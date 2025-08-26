@@ -1,5 +1,7 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use crossbeam::utils::Backoff;
+use crossbeam::atomic::AtomicCell;
+use std::sync::RwLock;
 
 use super::config::StreamClientConfig;
 use super::constants::*;
@@ -31,9 +33,9 @@ impl EventMetrics {
 pub struct PerformanceMetrics {
     pub start_time: std::time::Instant,
     pub event_metrics: [EventMetrics; 3], // [Tx, Account, BlockMeta]
-    pub average_processing_time_ms: f64,
-    pub min_processing_time_ms: f64,
-    pub max_processing_time_ms: f64,
+    pub average_processing_time_us: f64,
+    pub min_processing_time_us: f64,
+    pub max_processing_time_us: f64,
     pub last_update_time: std::time::Instant,
 }
 
@@ -65,9 +67,9 @@ impl PerformanceMetrics {
         Self {
             start_time: now,
             event_metrics: [EventMetrics::new(now), EventMetrics::new(now), EventMetrics::new(now)],
-            average_processing_time_ms: 0.0,
-            min_processing_time_ms: 0.0,
-            max_processing_time_ms: 0.0,
+            average_processing_time_us: 0.0,
+            min_processing_time_us: 0.0,
+            max_processing_time_us: 0.0,
             last_update_time: now,
         }
     }
@@ -132,7 +134,7 @@ impl PerformanceMetrics {
 
 /// 通用性能监控管理器
 pub struct MetricsManager {
-    metrics: Arc<Mutex<PerformanceMetrics>>,
+    metrics: Arc<RwLock<PerformanceMetrics>>,
     config: Arc<StreamClientConfig>,
     stream_name: String,
 }
@@ -140,7 +142,7 @@ pub struct MetricsManager {
 impl MetricsManager {
     /// 创建新的性能监控管理器
     pub fn new(
-        metrics: Arc<Mutex<PerformanceMetrics>>,
+        metrics: Arc<RwLock<PerformanceMetrics>>,
         config: Arc<StreamClientConfig>,
         stream_name: String,
     ) -> Self {
@@ -148,14 +150,24 @@ impl MetricsManager {
     }
 
     /// 获取性能指标
-    pub async fn get_metrics(&self) -> PerformanceMetrics {
-        let metrics = self.metrics.lock().await;
-        metrics.clone()
+    pub fn get_metrics(&self) -> PerformanceMetrics {
+        // 使用 Backoff 策略进行读取尝试
+        let backoff = Backoff::new();
+        loop {
+            match self.metrics.read() {
+                Ok(metrics) => return metrics.clone(),
+                Err(_) => {
+                    // 如果获取读锁失败，使用指数退避策略
+                    backoff.snooze();
+                    continue;
+                }
+            }
+        }
     }
 
     /// 打印性能指标
-    pub async fn print_metrics(&self) {
-        let metrics = self.get_metrics().await;
+    pub fn print_metrics(&self) {
+        let metrics = self.get_metrics();
         let event_names = ["TX", "Account", "Block Meta"];
         let event_types =
             [MetricsEventType::Tx, MetricsEventType::Account, MetricsEventType::BlockMeta];
@@ -189,11 +201,11 @@ impl MetricsManager {
         // 打印处理时间统计表格
         println!("\n⏱️  Processing Time Statistics");
         println!("┌─────────────────────┬─────────────┐");
-        println!("│ Metric              │ Value (ms)  │");
+        println!("│ Metric              │ Value (us)  │");
         println!("├─────────────────────┼─────────────┤");
-        println!("│ Average             │ {:9.2}   │", metrics.average_processing_time_ms);
-        println!("│ Minimum             │ {:9.2}   │", metrics.min_processing_time_ms);
-        println!("│ Maximum             │ {:9.2}   │", metrics.max_processing_time_ms);
+        println!("│ Average             │ {:9.2}   │", metrics.average_processing_time_us);
+        println!("│ Minimum             │ {:9.2}   │", metrics.min_processing_time_us);
+        println!("│ Maximum             │ {:9.2}   │", metrics.max_processing_time_us);
         println!("└─────────────────────┴─────────────┘");
         println!();
     }
@@ -212,91 +224,118 @@ impl MetricsManager {
             ));
             loop {
                 interval.tick().await;
-                metrics_manager.print_metrics().await;
+                metrics_manager.print_metrics();
             }
         });
         Some(handle)
     }
 
     /// 更新处理次数
-    pub async fn add_process_count(&self, event_type: MetricsEventType) {
+    pub fn add_process_count(&self, event_type: MetricsEventType) {
         if !self.config.enable_metrics {
             return;
         }
-        let mut metrics = self.metrics.lock().await;
-        metrics.event_metrics[event_type.as_index()].process_count += 1;
+        
+        // 使用 Backoff 策略进行写入尝试
+        let backoff = Backoff::new();
+        loop {
+            match self.metrics.write() {
+                Ok(mut metrics) => {
+                    metrics.event_metrics[event_type.as_index()].process_count += 1;
+                    break;
+                },
+                Err(_) => {
+                    // 如果获取写锁失败，使用指数退避策略
+                    backoff.snooze();
+                    continue;
+                }
+            }
+        }
     }
 
     // 保持向后兼容的方法
-    pub async fn add_tx_process_count(&self) {
-        self.add_process_count(MetricsEventType::Tx).await;
+    pub fn add_tx_process_count(&self) {
+        self.add_process_count(MetricsEventType::Tx);
     }
 
-    pub async fn add_account_process_count(&self) {
-        self.add_process_count(MetricsEventType::Account).await;
+    pub fn add_account_process_count(&self) {
+        self.add_process_count(MetricsEventType::Account);
     }
 
-    pub async fn add_block_meta_process_count(&self) {
-        self.add_process_count(MetricsEventType::BlockMeta).await;
+    pub fn add_block_meta_process_count(&self) {
+        self.add_process_count(MetricsEventType::BlockMeta);
     }
 
     /// 更新性能指标
-    pub async fn update_metrics(
+    pub fn update_metrics(
         &self,
         event_type: MetricsEventType,
         events_processed: u64,
-        processing_time_ms: f64,
+        processing_time_us: f64,
     ) {
         // 检查是否启用性能监控
         if !self.config.enable_metrics {
             return;
         }
+        
+        // 使用 Backoff 策略进行写入尝试
+        let backoff = Backoff::new();
+        loop {
+            match self.metrics.write() {
+                Ok(mut metrics) => {
+                    let now = std::time::Instant::now();
+                    let index = event_type.as_index();
 
-        let mut metrics = self.metrics.lock().await;
-        let now = std::time::Instant::now();
-        let index = event_type.as_index();
+                    // 更新事件计数
+                    metrics.event_metrics[index].events_processed += events_processed;
+                    metrics.event_metrics[index].events_in_window += events_processed;
 
-        // 更新事件计数
-        metrics.event_metrics[index].events_processed += events_processed;
-        metrics.event_metrics[index].events_in_window += events_processed;
+                    metrics.last_update_time = now;
 
-        metrics.last_update_time = now;
+                    // 更新处理时间统计
+                    if processing_time_us < metrics.min_processing_time_us
+                        || metrics.min_processing_time_us == 0.0
+                    {
+                        metrics.min_processing_time_us = processing_time_us;
+                    }
+                    if processing_time_us > metrics.max_processing_time_us {
+                        metrics.max_processing_time_us = processing_time_us;
+                    }
 
-        // 更新处理时间统计
-        if processing_time_ms < metrics.min_processing_time_ms
-            || metrics.min_processing_time_ms == 0.0
-        {
-            metrics.min_processing_time_ms = processing_time_ms;
+                    // 计算平均处理时间 - 使用增量更新避免重复计算
+                    let total_events = metrics.event_metrics[index].events_processed;
+                    if total_events > 0 {
+                        let total_events_f64 = total_events as f64;
+                        let old_total = (total_events_f64 - events_processed as f64).max(0.0);
+
+                        metrics.average_processing_time_us = if old_total > 0.0 {
+                            (metrics.average_processing_time_us * old_total
+                                + processing_time_us * events_processed as f64)
+                                / total_events_f64
+                        } else {
+                            processing_time_us
+                        };
+                    }
+
+                    // 更新时间窗口指标
+                    let window_duration = std::time::Duration::from_secs(DEFAULT_METRICS_WINDOW_SECONDS);
+                    metrics.update_window_metrics(&event_type, now, window_duration);
+                    break;
+                },
+                Err(_) => {
+                    // 如果获取写锁失败，使用指数退避策略
+                    backoff.snooze();
+                    continue;
+                }
+            }
         }
-        if processing_time_ms > metrics.max_processing_time_ms {
-            metrics.max_processing_time_ms = processing_time_ms;
-        }
-
-        // 计算平均处理时间 - 使用增量更新避免重复计算
-        let total_events = metrics.event_metrics[index].events_processed;
-        if total_events > 0 {
-            let total_events_f64 = total_events as f64;
-            let old_total = (total_events_f64 - events_processed as f64).max(0.0);
-
-            metrics.average_processing_time_ms = if old_total > 0.0 {
-                (metrics.average_processing_time_ms * old_total
-                    + processing_time_ms * events_processed as f64)
-                    / total_events_f64
-            } else {
-                processing_time_ms
-            };
-        }
-
-        // 更新时间窗口指标
-        let window_duration = std::time::Duration::from_secs(DEFAULT_METRICS_WINDOW_SECONDS);
-        metrics.update_window_metrics(&event_type, now, window_duration);
     }
 
     /// 记录慢处理操作
-    pub fn log_slow_processing(&self, processing_time_ms: f64, event_count: usize) {
-        if processing_time_ms > SLOW_PROCESSING_THRESHOLD_MS {
+    pub fn log_slow_processing(&self, processing_time_us: f64, event_count: usize) {
+        if processing_time_us > SLOW_PROCESSING_THRESHOLD_US {
             log::warn!(
-                "{} slow processing: {processing_time_ms}ms for {event_count} events",
+                "{} slow processing: {processing_time_us}us for {event_count} events",
                 self.stream_name
             );
         }

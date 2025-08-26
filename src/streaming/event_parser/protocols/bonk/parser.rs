@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 
 use prost_types::Timestamp;
-use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
-use solana_transaction_status::UiCompiledInstruction;
+use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey, signature::Signature};
 
 use crate::streaming::event_parser::{
     common::{utils::*, EventMetadata, EventType, ProtocolType},
     core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
     protocols::bonk::{
-        bonk_pool_create_event_log_decode, bonk_trade_event_log_decode, discriminators, AmmFeeOn, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent, BonkPoolCreateEvent, BonkTradeEvent, ConstantCurve, CurveParams, FixedCurve, LinearCurve, MintParams, TradeDirection, VestingParams
+        bonk_pool_create_event_log_decode, bonk_trade_event_log_decode, discriminators, AmmFeeOn,
+        BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent, BonkPoolCreateEvent, BonkTradeEvent,
+        ConstantCurve, CurveParams, FixedCurve, LinearCurve, MintParams, TradeDirection,
+        VestingParams,
     },
 };
 
@@ -611,11 +613,11 @@ impl EventParser for BonkEventParser {
     }
     fn parse_events_from_inner_instruction(
         &self,
-        inner_instruction: &UiCompiledInstruction,
-        signature: &str,
+        inner_instruction: &CompiledInstruction,
+        signature: Signature,
         slot: u64,
         block_time: Option<Timestamp>,
-        program_received_time_ms: i64,
+        program_received_time_us: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_inner_instruction(
@@ -623,7 +625,7 @@ impl EventParser for BonkEventParser {
             signature,
             slot,
             block_time,
-            program_received_time_ms,
+            program_received_time_us,
             index,
         )
     }
@@ -632,10 +634,10 @@ impl EventParser for BonkEventParser {
         &self,
         instruction: &CompiledInstruction,
         accounts: &[Pubkey],
-        signature: &str,
+        signature: Signature,
         slot: u64,
         block_time: Option<Timestamp>,
-        program_received_time_ms: i64,
+        program_received_time_us: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_instruction(
@@ -644,7 +646,7 @@ impl EventParser for BonkEventParser {
             signature,
             slot,
             block_time,
-            program_received_time_ms,
+            program_received_time_us,
             index,
         )
     }

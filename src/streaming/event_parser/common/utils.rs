@@ -1,20 +1,8 @@
-use base64::engine::general_purpose;
-use base64::Engine;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 获取当前时间戳
 pub fn current_timestamp() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs() as i64
-}
-
-/// 从base64字符串解码数据
-pub fn decode_base64(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    general_purpose::STANDARD.decode(data)
-}
-
-/// 将数据编码为base64字符串
-pub fn encode_base64(data: &[u8]) -> String {
-    general_purpose::STANDARD.encode(data)
 }
 
 /// 从字节数组中提取鉴别器和剩余数据

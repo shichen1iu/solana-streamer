@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::RwLock;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
@@ -13,7 +14,7 @@ use crate::streaming::common::{
 pub struct ShredStreamGrpc {
     pub shredstream_client: Arc<ShredstreamProxyClient<Channel>>,
     pub config: StreamClientConfig,
-    pub metrics: Arc<Mutex<PerformanceMetrics>>,
+    pub metrics: Arc<RwLock<PerformanceMetrics>>,
     pub metrics_manager: MetricsManager,
     pub subscription_handle: Arc<Mutex<Option<SubscriptionHandle>>>,
 }
@@ -27,7 +28,7 @@ impl ShredStreamGrpc {
     /// 创建客户端，使用自定义配置
     pub async fn new_with_config(endpoint: String, config: StreamClientConfig) -> AnyResult<Self> {
         let shredstream_client = ShredstreamProxyClient::connect(endpoint.clone()).await?;
-        let metrics = Arc::new(Mutex::new(PerformanceMetrics::new()));
+        let metrics = Arc::new(RwLock::new(PerformanceMetrics::new()));
         let config_arc = Arc::new(config.clone());
 
         let metrics_manager =
@@ -36,7 +37,7 @@ impl ShredStreamGrpc {
         Ok(Self {
             shredstream_client: Arc::new(shredstream_client),
             config,
-            metrics,
+            metrics: metrics.clone(),
             metrics_manager,
             subscription_handle: Arc::new(Mutex::new(None)),
         })
@@ -63,8 +64,8 @@ impl ShredStreamGrpc {
     }
 
     /// 获取性能指标
-    pub async fn get_metrics(&self) -> PerformanceMetrics {
-        self.metrics_manager.get_metrics().await
+    pub fn get_metrics(&self) -> PerformanceMetrics {
+        self.metrics_manager.get_metrics()
     }
 
     /// 启用或禁用性能监控
@@ -73,8 +74,8 @@ impl ShredStreamGrpc {
     }
 
     /// 打印性能指标
-    pub async fn print_metrics(&self) {
-        self.metrics_manager.print_metrics().await;
+    pub fn print_metrics(&self) {
+        self.metrics_manager.print_metrics();
     }
 
     /// 启动自动性能监控任务

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use prost_types::Timestamp;
+use solana_sdk::signature::Signature;
 use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
-use solana_transaction_status::UiCompiledInstruction;
 
 use crate::streaming::event_parser::common::filter::EventTypeFilter;
 use crate::streaming::event_parser::{
@@ -23,18 +23,38 @@ impl MutilEventParser {
 
             // Merge inner_instruction_configs, append configurations to existing Vec
             for (key, configs) in parse.inner_instruction_configs() {
-                let filtered_configs: Vec<GenericEventParseConfig> = configs.into_iter().filter(|config| {
-                    event_type_filter.as_ref().map(|filter| filter.include.contains(&config.event_type)).unwrap_or(true)
-                }).collect();
-                inner.inner_instruction_configs.entry(key).or_insert_with(Vec::new).extend(filtered_configs);
+                let filtered_configs: Vec<GenericEventParseConfig> = configs
+                    .into_iter()
+                    .filter(|config| {
+                        event_type_filter
+                            .as_ref()
+                            .map(|filter| filter.include.contains(&config.event_type))
+                            .unwrap_or(true)
+                    })
+                    .collect();
+                inner
+                    .inner_instruction_configs
+                    .entry(key)
+                    .or_insert_with(Vec::new)
+                    .extend(filtered_configs);
             }
 
             // Merge instruction_configs, append configurations to existing Vec
             for (key, configs) in parse.instruction_configs() {
-                let filtered_configs: Vec<GenericEventParseConfig> = configs.into_iter().filter(|config| {
-                    event_type_filter.as_ref().map(|filter| filter.include.contains(&config.event_type)).unwrap_or(true)
-                }).collect();
-                inner.instruction_configs.entry(key).or_insert_with(Vec::new).extend(filtered_configs);
+                let filtered_configs: Vec<GenericEventParseConfig> = configs
+                    .into_iter()
+                    .filter(|config| {
+                        event_type_filter
+                            .as_ref()
+                            .map(|filter| filter.include.contains(&config.event_type))
+                            .unwrap_or(true)
+                    })
+                    .collect();
+                inner
+                    .instruction_configs
+                    .entry(key)
+                    .or_insert_with(Vec::new)
+                    .extend(filtered_configs);
             }
 
             // Append program_ids (this is already appending)
@@ -54,11 +74,11 @@ impl EventParser for MutilEventParser {
     }
     fn parse_events_from_inner_instruction(
         &self,
-        inner_instruction: &UiCompiledInstruction,
-        signature: &str,
+        inner_instruction: &CompiledInstruction,
+        signature: Signature,
         slot: u64,
         block_time: Option<Timestamp>,
-        program_received_time_ms: i64,
+        program_received_time_us: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_inner_instruction(
@@ -66,7 +86,7 @@ impl EventParser for MutilEventParser {
             signature,
             slot,
             block_time,
-            program_received_time_ms,
+            program_received_time_us,
             index,
         )
     }
@@ -75,10 +95,10 @@ impl EventParser for MutilEventParser {
         &self,
         instruction: &CompiledInstruction,
         accounts: &[Pubkey],
-        signature: &str,
+        signature: Signature,
         slot: u64,
         block_time: Option<Timestamp>,
-        program_received_time_ms: i64,
+        program_received_time_us: i64,
         index: String,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_instruction(
@@ -87,7 +107,7 @@ impl EventParser for MutilEventParser {
             signature,
             slot,
             block_time,
-            program_received_time_ms,
+            program_received_time_us,
             index,
         )
     }

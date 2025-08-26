@@ -13,7 +13,12 @@ pub struct BlockMetaEvent {
 }
 
 impl BlockMetaEvent {
-    pub fn new(slot: u64, block_hash: String, block_time_ms: i64) -> Self {
+    pub fn new(
+        slot: u64,
+        block_hash: String,
+        block_time_ms: i64,
+        program_received_time_us: i64,
+    ) -> Self {
         let metadata = EventMetadata::new(
             format!("block_{}_{}", slot, block_hash),
             "".to_string(),
@@ -24,7 +29,7 @@ impl BlockMetaEvent {
             EventType::BlockMeta,
             solana_sdk::pubkey::Pubkey::default(),
             "".to_string(),
-            chrono::Utc::now().timestamp_millis(),
+            program_received_time_us,
         );
         Self { metadata, slot, block_hash }
     }

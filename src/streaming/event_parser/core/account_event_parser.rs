@@ -158,12 +158,11 @@ impl AccountEventParser {
     pub fn parse_account_event(
         protocols: Vec<Protocol>,
         account: AccountPretty,
-        program_received_time_ms: i64,
         event_type_filter: Option<EventTypeFilter>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         let configs = Self::configs(protocols, event_type_filter);
         for config in configs {
-            if account.owner == config.program_id.to_string()
+            if account.owner == config.program_id
                 && account.data[..config.account_discriminator.len()]
                     == *config.account_discriminator
             {
@@ -171,17 +170,17 @@ impl AccountEventParser {
                     &account,
                     EventMetadata {
                         slot: account.slot,
-                        signature: account.signature.clone(),
+                        signature: account.signature.to_string(),
                         protocol: config.protocol_type,
                         event_type: config.event_type,
                         program_id: config.program_id,
-                        program_received_time_ms,
+                        program_received_time_us: account.program_received_time_us,
                         ..Default::default()
                     },
                 );
                 if let Some(mut event) = event {
-                    event.set_program_handle_time_consuming_ms(
-                        chrono::Utc::now().timestamp_millis() - program_received_time_ms,
+                    event.set_program_handle_time_consuming_us(
+                        chrono::Utc::now().timestamp_micros() - account.program_received_time_us,
                     );
                     return Some(event);
                 }

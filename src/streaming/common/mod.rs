@@ -4,6 +4,7 @@ pub mod metrics;
 pub mod batch;
 pub mod constants;
 pub mod subscription;
+pub mod event_processor;
 
 // 重新导出主要类型
 pub use config::*;
@@ -11,3 +12,4 @@ pub use metrics::*;
 pub use batch::*;
 pub use constants::*;
 pub use subscription::*;
+pub use event_processor::*;
