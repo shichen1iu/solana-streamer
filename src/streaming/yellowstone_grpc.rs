@@ -1,10 +1,12 @@
-use futures::{channel::mpsc, StreamExt};
+use futures::{channel::mpsc, SinkExt, StreamExt};
 use log::error;
 use solana_sdk::pubkey::Pubkey;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use yellowstone_grpc_proto::geyser::CommitmentLevel;
+use tokio::sync::{Mutex, RwLock};
+use yellowstone_grpc_proto::geyser::{CommitmentLevel, SubscribeRequest};
 
+use anyhow::anyhow;
 use crate::common::AnyResult;
 use crate::streaming::common::{
     EventBatchProcessor, MetricsManager, PerformanceMetrics, StreamClientConfig, SubscriptionHandle,
@@ -14,6 +16,7 @@ use crate::streaming::event_parser::{Protocol, UnifiedEvent};
 use crate::streaming::grpc::{EventPretty, EventProcessor, StreamHandler, SubscriptionManager};
 
 /// 交易过滤器
+#[derive(Debug, Clone)]
 pub struct TransactionFilter {
     pub account_include: Vec<String>,
     pub account_exclude: Vec<String>,
@@ -21,6 +24,7 @@ pub struct TransactionFilter {
 }
 
 /// 账户过滤器
+#[derive(Debug, Clone)]
 pub struct AccountFilter {
     pub account: Vec<String>,
     pub owner: Vec<String>,
@@ -35,6 +39,10 @@ pub struct YellowstoneGrpc {
     pub metrics_manager: MetricsManager,
     pub event_processor: EventProcessor,
     pub subscription_handle: Arc<Mutex<Option<SubscriptionHandle>>>,
+    // Dynamic subscription management fields
+    pub active_subscription: Arc<AtomicBool>,
+    pub control_tx: Arc<Mutex<Option<mpsc::Sender<SubscribeRequest>>>>,
+    pub current_request: Arc<RwLock<Option<SubscribeRequest>>>,
 }
 
 impl YellowstoneGrpc {
@@ -68,6 +76,9 @@ impl YellowstoneGrpc {
             metrics_manager,
             event_processor,
             subscription_handle: Arc::new(Mutex::new(None)),
+            active_subscription: Arc::new(AtomicBool::new(false)),
+            control_tx: Arc::new(Mutex::new(None)),
+            current_request: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -119,6 +130,10 @@ impl YellowstoneGrpc {
         if let Some(handle) = handle_guard.take() {
             handle.stop();
         }
+        
+        *self.control_tx.lock().await = None;
+        *self.current_request.write().await = None;
+        self.active_subscription.store(false, Ordering::Release);
     }
 
     /// Simplified immediate event subscription (recommended for simple scenarios)
@@ -147,8 +162,14 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
     {
-        // 如果已有活跃订阅，先停止它
-        self.stop().await;
+        if self.active_subscription.compare_exchange(
+            false,
+            true,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        ).is_err() {
+            return Err(anyhow!("Already subscribed. Use update_subscription() to modify filters"));
+        }
 
         let mut metrics_handle = None;
         // 启动自动性能监控（如果启用）
@@ -169,10 +190,16 @@ impl YellowstoneGrpc {
         );
 
         // 订阅事件
-        let (mut subscribe_tx, mut stream) = self
+        let (mut subscribe_tx, mut stream, subscribe_request) = self
             .subscription_manager
             .subscribe_with_request(transactions, accounts, commitment, event_type_filter.clone())
             .await?;
+
+        *self.current_request.write().await = Some(subscribe_request);
+
+        let (control_tx, mut control_rx) = mpsc::channel(100);
+
+        *self.control_tx.lock().await = Some(control_tx);
 
         // 创建通道，使用配置中的通道大小
         let (mut tx, mut rx) = mpsc::channel::<EventPretty>(self.config.backpressure.channel_size);
@@ -180,24 +207,36 @@ impl YellowstoneGrpc {
         // 启动流处理任务
         let backpressure_strategy = self.config.backpressure.strategy;
         let stream_handle = tokio::spawn(async move {
-            while let Some(message) = stream.next().await {
-                match message {
-                    Ok(msg) => {
-                        if let Err(e) = StreamHandler::handle_stream_message(
-                            msg,
-                            &mut tx,
-                            &mut subscribe_tx,
-                            backpressure_strategy,
-                        )
-                        .await
-                        {
-                            error!("Error handling message: {e:?}");
-                            break;
+            loop {
+                tokio::select! {
+                    message = stream.next() => {
+                        match message {
+                            Some(Ok(msg)) => {
+                                if let Err(e) = StreamHandler::handle_stream_message(
+                                    msg,
+                                    &mut tx,
+                                    &mut subscribe_tx,
+                                    backpressure_strategy,
+                                )
+                                .await
+                                {
+                                    error!("Error handling message: {e:?}");
+                                    break;
+                                }
+                            }
+                            Some(Err(error)) => {
+                                error!("Stream error: {error:?}");
+                                break;
+                            }
+                            None => break,
                         }
                     }
-                    Err(error) => {
-                        error!("Stream error: {error:?}");
-                        break;
+                    
+                    Some(update) = control_rx.next() => {
+                        if let Err(e) = subscribe_tx.send(update).await {
+                            error!("Failed to send subscription update: {}", e);
+                            break;
+                        }
                     }
                 }
             }
@@ -263,8 +302,15 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
     {
-        // 如果已有活跃订阅，先停止它
-        self.stop().await;
+        // Single subscription enforcement
+        if self.active_subscription.compare_exchange(
+            false,
+            true,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        ).is_err() {
+            return Err(anyhow!("Already subscribed. Use update_subscription() to modify filters"));
+        }
 
         let mut metrics_handle = None;
         // 启动自动性能监控（如果启用）
@@ -285,10 +331,16 @@ impl YellowstoneGrpc {
         );
 
         // Subscribe to events
-        let (mut subscribe_tx, mut stream) = self
+        let (mut subscribe_tx, mut stream, subscribe_request) = self
             .subscription_manager
             .subscribe_with_request(transactions, accounts, commitment, event_type_filter.clone())
             .await?;
+
+        *self.current_request.write().await = Some(subscribe_request);
+
+        let (control_tx, mut control_rx) = mpsc::channel(100);
+
+        *self.control_tx.lock().await = Some(control_tx);
 
         // Create channel
         let (mut tx, mut rx) = mpsc::channel::<EventPretty>(self.config.backpressure.channel_size);
@@ -309,24 +361,36 @@ impl YellowstoneGrpc {
         // Start task to process the stream
         let backpressure_strategy = self.config.backpressure.strategy;
         let stream_handle = tokio::spawn(async move {
-            while let Some(message) = stream.next().await {
-                match message {
-                    Ok(msg) => {
-                        if let Err(e) = StreamHandler::handle_stream_message(
-                            msg,
-                            &mut tx,
-                            &mut subscribe_tx,
-                            backpressure_strategy,
-                        )
-                        .await
-                        {
-                            error!("Error handling message: {e:?}");
-                            break;
+            loop {
+                tokio::select! {
+                    message = stream.next() => {
+                        match message {
+                            Some(Ok(msg)) => {
+                                if let Err(e) = StreamHandler::handle_stream_message(
+                                    msg,
+                                    &mut tx,
+                                    &mut subscribe_tx,
+                                    backpressure_strategy,
+                                )
+                                .await
+                                {
+                                    error!("Error handling message: {e:?}");
+                                    break;
+                                }
+                            }
+                            Some(Err(error)) => {
+                                error!("Stream error: {error:?}");
+                                break;
+                            }
+                            None => break,
                         }
                     }
-                    Err(error) => {
-                        error!("Stream error: {error:?}");
-                        break;
+                    
+                    Some(update) = control_rx.next() => {
+                        if let Err(e) = subscribe_tx.send(update).await {
+                            error!("Failed to send subscription update: {}", e);
+                            break;
+                        }
                     }
                 }
             }
@@ -362,6 +426,61 @@ impl YellowstoneGrpc {
 
         Ok(())
     }
+
+    /// Update subscription filters at runtime without reconnection
+    ///
+    /// # Parameters
+    /// * `transaction_filter` - New transaction filter to apply
+    /// * `account_filter` - New account filter to apply
+    ///
+    /// # Returns
+    /// Returns `AnyResult<()>` on success, error on failure
+    pub async fn update_subscription(
+        &self,
+        transaction_filter: TransactionFilter,
+        account_filter: AccountFilter,
+    ) -> AnyResult<()> {
+        let mut control_sender = {
+            let control_guard = self.control_tx.lock().await;
+            
+            if !self.active_subscription.load(Ordering::Acquire) {
+                return Err(anyhow!("No active subscription to update"));
+            }
+            
+            control_guard.as_ref()
+                .ok_or_else(|| anyhow!("No active subscription to update"))?
+                .clone()
+        };
+        
+        let mut request = self.current_request.read().await
+            .as_ref()
+            .ok_or_else(|| anyhow!("No active subscription"))?
+            .clone();
+        
+        request.transactions = self.subscription_manager
+            .get_subscribe_request_filter(
+                transaction_filter.account_include,
+                transaction_filter.account_exclude, 
+                transaction_filter.account_required,
+                None,
+            )
+            .unwrap_or_default();
+        
+        request.accounts = self.subscription_manager
+            .subscribe_with_account_request(
+                account_filter.account,
+                account_filter.owner,
+                None,
+            )
+            .unwrap_or_default();
+        
+        control_sender.send(request.clone()).await
+            .map_err(|e| anyhow!("Failed to send update: {}", e))?;
+        
+        *self.current_request.write().await = Some(request);
+        
+        Ok(())
+    }
 }
 
 // 实现 Clone trait 以支持模块间共享
@@ -376,6 +495,9 @@ impl Clone for YellowstoneGrpc {
             metrics_manager: self.metrics_manager.clone(),
             event_processor: self.event_processor.clone(),
             subscription_handle: self.subscription_handle.clone(), // 共享同一个 Arc<Mutex<>>
+            active_subscription: self.active_subscription.clone(),
+            control_tx: self.control_tx.clone(),
+            current_request: self.current_request.clone(),
         }
     }
 }
