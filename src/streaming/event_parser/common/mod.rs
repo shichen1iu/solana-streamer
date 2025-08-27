@@ -54,7 +54,7 @@ macro_rules! impl_unified_event {
                 Box::new(self.clone())
             }
 
-            fn merge(&mut self, other: Box<dyn $crate::streaming::event_parser::core::traits::UnifiedEvent>) {
+            fn merge(&mut self, other: &dyn $crate::streaming::event_parser::core::traits::UnifiedEvent) {
                 if let Some(_e) = other.as_any().downcast_ref::<$struct_name>() {
                     $(
                         self.$field = _e.$field.clone();
@@ -66,10 +66,13 @@ macro_rules! impl_unified_event {
                 self.metadata.set_swap_data(swap_data);
             }
 
-            fn index(&self) -> String {
-                self.metadata.index.clone()
+            fn instruction_outer_index(&self) -> i64 {
+                self.metadata.instruction_outer_index
             }
 
+            fn instruction_inner_index(&self) -> Option<i64> {
+                self.metadata.instruction_inner_index
+            }
             fn transaction_index(&self) -> Option<u64> {
                 self.metadata.transaction_index
             }

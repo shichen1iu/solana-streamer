@@ -55,36 +55,9 @@ impl EventMetadataPool {
     }
 }
 
-/// Transfer data object pool
-pub struct TransferDataPool {
-    pool: Arc<ArrayQueue<TransferData>>,
-}
-
-impl Default for TransferDataPool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TransferDataPool {
-    pub fn new() -> Self {
-        Self { pool: Arc::new(ArrayQueue::new(TRANSFER_DATA_POOL_SIZE)) }
-    }
-
-    pub fn acquire(&self) -> Option<TransferData> {
-        self.pool.pop()
-    }
-
-    pub fn release(&self, transfer_data: TransferData) {
-        // 如果队列已满，push 会失败，但不会阻塞
-        let _ = self.pool.push(transfer_data);
-    }
-}
-
 // Global object pool instances
 lazy_static::lazy_static! {
     pub static ref EVENT_METADATA_POOL: EventMetadataPool = EventMetadataPool::new();
-    pub static ref TRANSFER_DATA_POOL: TransferDataPool = TransferDataPool::new();
 }
 
 #[derive(
@@ -304,20 +277,6 @@ impl ProtocolInfo {
     }
 }
 
-/// Transfer data
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub struct TransferData {
-    pub token_program: Pubkey,
-    pub source: Pubkey,
-    pub destination: Pubkey,
-    pub authority: Option<Pubkey>,
-    pub amount: u64,
-    pub decimals: Option<u8>,
-    pub mint: Option<Pubkey>,
-}
-
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
@@ -337,7 +296,7 @@ pub struct EventMetadata {
     pub id: String,
     pub signature: String,
     pub slot: u64,
-    pub transaction_index: Option<u64>,  // 新增：交易在slot中的索引
+    pub transaction_index: Option<u64>, // 新增：交易在slot中的索引
     pub block_time: i64,
     pub block_time_ms: i64,
     pub program_received_time_us: i64,
@@ -345,10 +304,9 @@ pub struct EventMetadata {
     pub protocol: ProtocolType,
     pub event_type: EventType,
     pub program_id: Pubkey,
-    #[deprecated(note = "Please use swap_data instead")]
-    pub transfer_datas: Vec<TransferData>,
     pub swap_data: Option<SwapData>,
-    pub index: String,  // 保留原有的指令索引
+    pub instruction_outer_index: i64,
+    pub instruction_inner_index: Option<i64>,
 }
 
 impl EventMetadata {
@@ -362,14 +320,15 @@ impl EventMetadata {
         protocol: ProtocolType,
         event_type: EventType,
         program_id: Pubkey,
-        index: String,
+        instruction_outer_index: i64,
+        instruction_inner_index: Option<i64>,
         program_received_time_us: i64,
     ) -> Self {
         Self {
             id,
             signature,
             slot,
-            transaction_index: None,  // 默认为None，后续设置
+            transaction_index: None, // 默认为None，后续设置
             block_time,
             block_time_ms,
             program_received_time_us,
@@ -377,9 +336,9 @@ impl EventMetadata {
             protocol,
             event_type,
             program_id,
-            transfer_datas: vec![],
             swap_data: None,
-            index,
+            instruction_outer_index,
+            instruction_inner_index,
         }
     }
 
@@ -413,7 +372,7 @@ lazy_static::lazy_static! {
 
 /// Parse token transfer data from next instructions
 pub fn parse_swap_data_from_next_instructions(
-    event: Box<dyn UnifiedEvent>,
+    event: &dyn UnifiedEvent,
     inner_instruction: &solana_transaction_status::InnerInstructions,
     current_index: i8,
     accounts: &[Pubkey],
@@ -435,7 +394,7 @@ pub fn parse_swap_data_from_next_instructions(
     let mut from_vault: Option<Pubkey> = None;
     let mut to_vault: Option<Pubkey> = None;
 
-    match_event!(event, {
+    match_event!(&*event, {
         BonkTradeEvent => |e: BonkTradeEvent| {
             user = Some(e.payer);
             from_mint = Some(e.base_token_mint);

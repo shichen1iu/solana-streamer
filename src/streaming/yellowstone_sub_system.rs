@@ -1,19 +1,17 @@
 use crate::{
     common::AnyResult,
     streaming::{
-        grpc::{BackpressureStrategy, EventPretty, StreamHandler},
+        grpc::{EventPretty, StreamHandler},
         yellowstone_grpc::YellowstoneGrpc,
     },
 };
-use futures::{channel::mpsc, StreamExt};
+use futures::StreamExt;
 use log::error;
 use solana_program::pubkey;
 use solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction};
 use solana_transaction_status::TransactionWithStatusMeta;
 
 const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
-// 根据实际并发量调整通道大小，避免背压
-const CHANNEL_SIZE: usize = 50000; // 增加到 50000
 
 #[derive(Debug)]
 pub enum SystemEvent {
@@ -51,7 +49,6 @@ impl YellowstoneGrpc {
             .subscription_manager
             .subscribe_with_request(transactions, None, None, None)
             .await?;
-        let (mut tx, mut rx) = mpsc::channel::<EventPretty>(CHANNEL_SIZE);
 
         let callback = Box::new(callback);
 
@@ -59,16 +56,17 @@ impl YellowstoneGrpc {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
-                        if let Err(e) = StreamHandler::handle_stream_message(
-                            msg,
-                            &mut tx,
-                            &mut subscribe_tx,
-                            BackpressureStrategy::Block,
-                        )
-                        .await
+                        if let Ok(event_pretty) =
+                            StreamHandler::handle_stream_system_message(msg, &mut subscribe_tx)
+                                .await
                         {
-                            error!("Error handling message: {e:?}");
-                            break;
+                            if let Some(event_pretty) = event_pretty {
+                                if let Err(e) =
+                                    Self::process_system_transaction(event_pretty, &*callback).await
+                                {
+                                    error!("Error processing transaction: {e:?}");
+                                }
+                            }
                         }
                     }
                     Err(error) => {
@@ -78,12 +76,6 @@ impl YellowstoneGrpc {
                 }
             }
         });
-
-        while let Some(event_pretty) = rx.next().await {
-            if let Err(e) = Self::process_system_transaction(event_pretty, &*callback).await {
-                error!("Error processing transaction: {e:?}");
-            }
-        }
         Ok(())
     }
 

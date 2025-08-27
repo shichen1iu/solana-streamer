@@ -51,12 +51,14 @@ impl YellowstoneGrpc {
     ) -> AnyResult<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default().ok();
         let metrics = Arc::new(RwLock::new(PerformanceMetrics::new()));
-        let config_arc = Arc::new(config.clone());
 
         let subscription_manager =
             SubscriptionManager::new(endpoint.clone(), x_token.clone(), config.clone());
-        let metrics_manager =
-            MetricsManager::new(metrics.clone(), config_arc.clone(), "YellowstoneGrpc".to_string());
+        let metrics_manager = MetricsManager::new_with_metrics(
+            metrics.clone(),
+            config.enable_metrics,
+            "YellowstoneGrpc".to_string(),
+        );
         let event_processor = EventProcessor::new(metrics_manager.clone(), config.clone());
 
         Ok(Self {
@@ -179,8 +181,9 @@ impl YellowstoneGrpc {
         event_processor.set_protocols_and_event_type_filter(
             protocols,
             event_type_filter,
-            self.config.backpressure.strategy,
+            self.config.backpressure.clone(),
             self.config.batch.clone(),
+            Some(Arc::new(callback)),
         );
         let stream_handle = tokio::spawn(async move {
             while let Some(message) = stream.next().await {
@@ -190,7 +193,6 @@ impl YellowstoneGrpc {
                             msg,
                             &mut subscribe_tx,
                             event_processor.clone(),
-                            &callback,
                             bot_wallet,
                         )
                         .await
@@ -208,11 +210,7 @@ impl YellowstoneGrpc {
         });
 
         // 保存订阅句柄
-        let subscription_handle = SubscriptionHandle::new(
-            stream_handle,
-            self.event_processor.get_event_handle(),
-            metrics_handle,
-        );
+        let subscription_handle = SubscriptionHandle::new(stream_handle, None, metrics_handle);
         let mut handle_guard = self.subscription_handle.lock().await;
         *handle_guard = Some(subscription_handle);
 

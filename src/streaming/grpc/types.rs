@@ -69,7 +69,7 @@ impl fmt::Debug for BlockMetaPretty {
 #[derive(Clone)]
 pub struct TransactionPretty {
     pub slot: u64,
-    pub transaction_index: Option<u64>,  // 新增：交易在slot中的索引
+    pub transaction_index: Option<u64>, // 新增：交易在slot中的索引
     pub block_hash: String,
     pub block_time: Option<Timestamp>,
     pub signature: Signature,
@@ -95,10 +95,11 @@ impl From<SubscribeUpdateAccount> for AccountPretty {
         let account_info = account.account.unwrap();
         Self {
             slot: account.slot,
-            signature: Signature::try_from(
-                account_info.txn_signature.unwrap_or_default().as_slice(),
-            )
-            .expect("valid signature"),
+            signature: if let Some(txn_signature) = account_info.txn_signature {
+                Signature::try_from(txn_signature.as_slice()).expect("valid signature")
+            } else {
+                Signature::default()
+            },
             pubkey: Pubkey::try_from(account_info.pubkey.as_slice()).expect("valid pubkey"),
             executable: account_info.executable,
             lamports: account_info.lamports,
@@ -138,7 +139,7 @@ impl From<(SubscribeUpdateTransaction, Option<Timestamp>)> for TransactionPretty
         let transaction_index = tx.index;
         Self {
             slot,
-            transaction_index: Some(transaction_index),  // 提取交易索引
+            transaction_index: Some(transaction_index), // 提取交易索引
             block_time,
             block_hash: "".to_string(),
             signature: Signature::try_from(tx.signature.as_slice()).expect("valid signature"),

@@ -7,6 +7,7 @@ use solana_sdk::{
 use solana_transaction_status::{InnerInstructions, TransactionWithStatusMeta};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::streaming::event_parser::common::{parse_swap_data_from_next_instructions, SwapData};
 use crate::streaming::event_parser::protocols::pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent};
@@ -17,7 +18,6 @@ use crate::streaming::event_parser::{
         pumpfun::{PumpFunCreateTokenEvent, PumpFunTradeEvent},
     },
 };
-use crate::streaming::shred::MetricsEventType;
 
 /// Unified Event Interface - All protocol events must implement this trait
 pub trait UnifiedEvent: Debug + Send + Sync {
@@ -55,7 +55,7 @@ pub trait UnifiedEvent: Debug + Send + Sync {
     fn clone_boxed(&self) -> Box<dyn UnifiedEvent>;
 
     /// Merge events (optional implementation)
-    fn merge(&mut self, _other: Box<dyn UnifiedEvent>) {
+    fn merge(&mut self, _other: &dyn UnifiedEvent) {
         // Default implementation: no merging operation
     }
 
@@ -63,7 +63,8 @@ pub trait UnifiedEvent: Debug + Send + Sync {
     fn set_swap_data(&mut self, swap_data: SwapData);
 
     /// Get index
-    fn index(&self) -> String;
+    fn instruction_outer_index(&self) -> i64;
+    fn instruction_inner_index(&self) -> Option<i64>;
 
     /// Get transaction index in slot
     fn transaction_index(&self) -> Option<u64>;
@@ -88,7 +89,8 @@ pub trait EventParser: Send + Sync {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从指令中解析事件数据
@@ -101,7 +103,8 @@ pub trait EventParser: Send + Sync {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从VersionedTransaction中解析指令事件的通用方法
@@ -144,7 +147,8 @@ pub trait EventParser: Send + Sync {
                                 slot,
                                 block_time,
                                 program_received_time_us,
-                                format!("{index}"),
+                                index as i64,
+                                None,
                             )
                             .await
                         {
@@ -156,7 +160,7 @@ pub trait EventParser: Send + Sync {
                                 {
                                     events.iter_mut().for_each(|event| {
                                         let swap_data = parse_swap_data_from_next_instructions(
-                                            event.clone_boxed(),
+                                            event.as_ref(),
                                             inn,
                                             -1_i8,
                                             &accounts,
@@ -217,62 +221,100 @@ pub trait EventParser: Send + Sync {
         let mut inner_instructions: Vec<InnerInstructions> = vec![];
         if let Some(meta) = meta {
             inner_instructions = meta.inner_instructions.unwrap_or_default();
-            for loopup in meta.loaded_addresses.writable {
-                address_table_lookups.push(loopup);
-            }
-            for loopup in meta.loaded_addresses.readonly {
-                address_table_lookups.push(loopup);
-            }
+            address_table_lookups.reserve(
+                meta.loaded_addresses.writable.len() + meta.loaded_addresses.readonly.len(),
+            );
+            address_table_lookups.extend(
+                meta.loaded_addresses.writable.into_iter().chain(meta.loaded_addresses.readonly),
+            );
         }
-        let mut accounts: Vec<Pubkey> = vec![];
+
+        let mut accounts = Vec::with_capacity(
+            versioned_tx.message.static_account_keys().len() + address_table_lookups.len(),
+        );
+        accounts.extend_from_slice(versioned_tx.message.static_account_keys());
+        accounts.extend(address_table_lookups);
+
+        // 使用 Arc 包装共享数据，避免不必要的克隆
+        let accounts_arc = Arc::new(accounts);
+        let inner_instructions_arc = Arc::new(inner_instructions);
 
         // 预分配容量，避免动态扩容
         let mut instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(16);
+        let mut inner_instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(8);
 
-        // 解析指令事件
-        accounts = versioned_tx.message.static_account_keys().to_vec();
-        accounts.extend(address_table_lookups.clone());
-
-        instruction_events = self
-            .parse_instruction_events_from_versioned_transaction(
+        let accounts_for_task1 = Arc::clone(&accounts_arc);
+        let inner_instructions_for_task1 = Arc::clone(&inner_instructions_arc);
+        let task1 = async move {
+            self.parse_instruction_events_from_versioned_transaction(
                 &versioned_tx,
                 signature,
                 slot,
                 block_time,
                 program_received_time_us,
-                &accounts,
-                &inner_instructions,
+                &accounts_for_task1,
+                &inner_instructions_for_task1,
             )
             .await
-            .unwrap_or_else(|_e| vec![]);
+            .unwrap_or_else(|_e| vec![])
+        };
 
         // 解析内联指令事件
-        // 预分配容量，避免动态扩容
-        let mut inner_instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(8);
-        // 检查交易是否成功
-        for inner_instruction in inner_instructions {
+        let inner_instructions_for_task2 = Arc::clone(&inner_instructions_arc);
+        let accounts_for_task2_1 = Arc::clone(&accounts_arc);
+        let accounts_for_task2_2 = Arc::clone(&accounts_arc);
+
+        let mut task2_params = Vec::with_capacity(inner_instructions_for_task2.len() * 5);
+        for inner_instruction in inner_instructions_for_task2.iter() {
             for (index, instruction) in inner_instruction.instructions.iter().enumerate() {
-                // 解析嵌套指令
-                let compiled_instruction = instruction.instruction.clone();
+                task2_params.push((
+                    &instruction.instruction,
+                    signature,
+                    slot,
+                    block_time,
+                    program_received_time_us,
+                    inner_instruction.index as i64,
+                    Some(index as i64),
+                    inner_instruction,
+                ));
+            }
+        }
+        // 转换为 Arc<[T]> 更轻量
+        let task2_params: Arc<[_]> = task2_params.into();
+        let task2_params_clone = Arc::clone(&task2_params);
+        let task2_1 = async move {
+            let mut instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(16);
+            for (
+                instruction,
+                signature,
+                slot,
+                block_time,
+                program_received_time_us,
+                outer_index,
+                inner_index,
+                inner_instruction,
+            ) in task2_params_clone.iter()
+            {
                 if let Ok(mut events) = self
                     .parse_instruction(
-                        &compiled_instruction,
-                        &accounts,
-                        signature,
-                        slot,
-                        block_time,
-                        program_received_time_us,
-                        format!("{}.{}", inner_instruction.index, index),
+                        instruction,
+                        &accounts_for_task2_1,
+                        *signature,
+                        *slot,
+                        *block_time,
+                        *program_received_time_us,
+                        *outer_index,
+                        *inner_index,
                     )
                     .await
                 {
                     if !events.is_empty() {
                         events.iter_mut().for_each(|event| {
                             let swap_data = parse_swap_data_from_next_instructions(
-                                event.clone_boxed(),
+                                event.as_ref(),
                                 &inner_instruction,
-                                index as i8,
-                                &accounts,
+                                inner_index.unwrap_or_default() as i8,
+                                &accounts_for_task2_1,
                             );
                             if let Some(swap_data) = swap_data {
                                 event.set_swap_data(swap_data);
@@ -281,24 +323,41 @@ pub trait EventParser: Send + Sync {
                         instruction_events.extend(events);
                     }
                 }
+            }
+            instruction_events
+        };
+        let task2_2 = async move {
+            let mut inner_instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(8);
+            for (
+                instruction,
+                signature,
+                slot,
+                block_time,
+                program_received_time_us,
+                outer_index,
+                inner_index,
+                inner_instruction,
+            ) in task2_params.iter()
+            {
                 if let Ok(mut events) = self
                     .parse_inner_instruction(
-                        &compiled_instruction,
-                        signature,
-                        slot,
-                        block_time,
-                        program_received_time_us,
-                        format!("{}.{}", inner_instruction.index, index),
+                        instruction,
+                        *signature,
+                        *slot,
+                        *block_time,
+                        *program_received_time_us,
+                        *outer_index,
+                        *inner_index,
                     )
                     .await
                 {
                     if !events.is_empty() {
                         events.iter_mut().for_each(|event| {
                             let swap_data = parse_swap_data_from_next_instructions(
-                                event.clone_boxed(),
+                                event.as_ref(),
                                 &inner_instruction,
-                                index as i8,
-                                &accounts,
+                                inner_index.unwrap_or_default() as i8,
+                                &accounts_for_task2_2,
                             );
                             if let Some(swap_data) = swap_data {
                                 event.set_swap_data(swap_data);
@@ -308,39 +367,41 @@ pub trait EventParser: Send + Sync {
                     }
                 }
             }
-        }
+            inner_instruction_events
+        };
+
+        let (r1, r2_1, r2_2) = tokio::join!(task1, task2_1, task2_2);
+        instruction_events.extend(r1);
+        instruction_events.extend(r2_1);
+        inner_instruction_events.extend(r2_2);
 
         if !instruction_events.is_empty() && !inner_instruction_events.is_empty() {
             for instruction_event in &mut instruction_events {
                 for inner_instruction_event in &inner_instruction_events {
                     if instruction_event.id() == inner_instruction_event.id() {
-                        let i_index = instruction_event.index();
-                        let in_index = inner_instruction_event.index();
-                        if !i_index.contains(".") && in_index.contains(".") {
-                            let in_index_parts: Vec<&str> = in_index.split(".").collect();
-                            if !in_index_parts.is_empty() && in_index_parts[0] == i_index {
-                                instruction_event.merge(inner_instruction_event.clone_boxed());
+                        if instruction_event.instruction_inner_index().is_none()
+                            && inner_instruction_event.instruction_inner_index().is_some()
+                        {
+                            if inner_instruction_event.instruction_outer_index()
+                                == instruction_event.instruction_outer_index()
+                            {
+                                instruction_event.merge(inner_instruction_event.as_ref());
                                 break;
                             }
-                        } else if i_index.contains(".") && in_index.contains(".") {
-                            // 嵌套指令
-                            let i_index_parts: Vec<&str> = i_index.split(".").collect();
-                            let in_index_parts: Vec<&str> = in_index.split(".").collect();
-
-                            if !i_index_parts.is_empty()
-                                && !in_index_parts.is_empty()
-                                && i_index_parts[0] == in_index_parts[0]
+                        } else if instruction_event.instruction_inner_index().is_some()
+                            && inner_instruction_event.instruction_inner_index().is_some()
+                        {
+                            if instruction_event.instruction_outer_index()
+                                == inner_instruction_event.instruction_outer_index()
                             {
-                                let i_index_child_index = i_index_parts
-                                    .get(1)
-                                    .and_then(|s| s.parse::<u32>().ok())
-                                    .unwrap_or(0);
-                                let in_index_child_index = in_index_parts
-                                    .get(1)
-                                    .and_then(|s| s.parse::<u32>().ok())
-                                    .unwrap_or(0);
-                                if in_index_child_index > i_index_child_index {
-                                    instruction_event.merge(inner_instruction_event.clone_boxed());
+                                if inner_instruction_event
+                                    .instruction_inner_index()
+                                    .unwrap_or_default()
+                                    > instruction_event
+                                        .instruction_inner_index()
+                                        .unwrap_or_default()
+                                {
+                                    instruction_event.merge(inner_instruction_event.as_ref());
                                     break;
                                 }
                             }
@@ -433,7 +494,8 @@ pub trait EventParser: Send + Sync {
         slot: Option<u64>,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
         let events = self.parse_events_from_inner_instruction(
@@ -442,7 +504,8 @@ pub trait EventParser: Send + Sync {
             slot,
             block_time,
             program_received_time_us,
-            index,
+            outer_index,
+            inner_index,
         );
         Ok(events)
     }
@@ -456,7 +519,8 @@ pub trait EventParser: Send + Sync {
         slot: Option<u64>,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
         let events = self.parse_events_from_instruction(
@@ -466,7 +530,8 @@ pub trait EventParser: Send + Sync {
             slot,
             block_time,
             program_received_time_us,
-            index,
+            outer_index,
+            inner_index,
         );
         Ok(events)
     }
@@ -543,7 +608,8 @@ impl GenericEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(parser) = config.inner_instruction_parser {
             let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
@@ -557,7 +623,8 @@ impl GenericEventParser {
                 config.protocol_type.clone(),
                 config.event_type.clone(),
                 config.program_id,
-                index,
+                outer_index,
+                inner_index,
                 program_received_time_us,
             );
             parser(data, metadata)
@@ -577,7 +644,8 @@ impl GenericEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(parser) = config.instruction_parser {
             let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
@@ -591,7 +659,8 @@ impl GenericEventParser {
                 config.protocol_type.clone(),
                 config.event_type.clone(),
                 config.program_id,
-                index,
+                outer_index,
+                inner_index,
                 program_received_time_us,
             );
             parser(data, account_pubkeys, metadata)
@@ -604,9 +673,11 @@ impl GenericEventParser {
 #[async_trait::async_trait]
 impl EventParser for GenericEventParser {
     fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
+        // 返回引用而非克隆，减少内存分配
         self.inner_instruction_configs.clone()
     }
     fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
+        // 返回引用而非克隆，减少内存分配
         self.instruction_configs.clone()
     }
     /// 从内联指令中解析事件数据
@@ -618,7 +689,8 @@ impl EventParser for GenericEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let inner_instruction_data_decoded = inner_instruction.data.clone();
         if inner_instruction_data_decoded.len() < 16 {
@@ -638,7 +710,8 @@ impl EventParser for GenericEventParser {
                         slot,
                         block_time,
                         program_received_time_us,
-                        index.clone(),
+                        outer_index,
+                        inner_index,
                     ) {
                         events.push(event);
                     }
@@ -658,7 +731,8 @@ impl EventParser for GenericEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let program_id = accounts[instruction.program_id_index as usize];
         if !self.should_handle(&program_id) {
@@ -691,7 +765,8 @@ impl EventParser for GenericEventParser {
                         slot,
                         block_time,
                         program_received_time_us,
-                        index.clone(),
+                        outer_index,
+                        inner_index,
                     ) {
                         events.push(event);
                     }

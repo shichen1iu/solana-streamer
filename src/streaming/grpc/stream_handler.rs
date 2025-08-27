@@ -8,7 +8,6 @@ use yellowstone_grpc_proto::geyser::{
 use super::types::{BlockMetaPretty, EventPretty, TransactionPretty};
 use crate::common::AnyResult;
 use crate::streaming::common::EventProcessor;
-use crate::streaming::event_parser::UnifiedEvent;
 use crate::streaming::grpc::AccountPretty;
 
 /// 流消息处理器
@@ -16,16 +15,12 @@ pub struct StreamHandler;
 
 impl StreamHandler {
     /// 处理单个流消息
-    pub async fn handle_stream_message<F>(
+    pub async fn handle_stream_message(
         msg: SubscribeUpdate,
         subscribe_tx: &mut (impl Sink<SubscribeRequest, Error = mpsc::SendError> + Unpin),
         event_processor: EventProcessor,
-        callback: &F,
         bot_wallet: Option<Pubkey>,
-    ) -> AnyResult<()>
-    where
-        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync,
-    {
+    ) -> AnyResult<()> {
         let created_at = msg.created_at;
         match msg.update_oneof {
             Some(UpdateOneof::Account(account)) => {
@@ -34,7 +29,6 @@ impl StreamHandler {
                 event_processor
                     .process_grpc_event_transaction_with_metrics(
                         EventPretty::Account(account_pretty),
-                        callback,
                         bot_wallet,
                     )
                     .await?;
@@ -45,7 +39,6 @@ impl StreamHandler {
                 event_processor
                     .process_grpc_event_transaction_with_metrics(
                         EventPretty::BlockMeta(block_meta_pretty),
-                        callback,
                         bot_wallet,
                     )
                     .await?;
@@ -60,7 +53,6 @@ impl StreamHandler {
                 event_processor
                     .process_grpc_event_transaction_with_metrics(
                         EventPretty::Transaction(transaction_pretty),
-                        callback,
                         bot_wallet,
                     )
                     .await?;
@@ -84,58 +76,25 @@ impl StreamHandler {
         Ok(())
     }
 
-    //     /// 处理背压策略
-    //     async fn handle_backpressure(
-    //         tx: &mut mpsc::Sender<EventPretty>,
-    //         event_pretty: EventPretty,
-    //         backpressure_strategy: BackpressureStrategy,
-    //     ) -> AnyResult<()> {
-    //         match backpressure_strategy {
-    //             BackpressureStrategy::Block => {
-    //                 // 阻塞等待，直到有空间
-    //                 if let Err(e) = tx.send(event_pretty).await {
-    //                     log::error!("Failed to send transaction to channel: {:?}", e);
-    //                     return Err(anyhow::anyhow!("Channel send failed: {:?}", e));
-    //                 }
-    //             }
-    //             BackpressureStrategy::Drop => {
-    //                 // 尝试发送，如果失败则丢弃
-    //                 if let Err(e) = tx.try_send(event_pretty) {
-    //                     if e.is_full() {
-    //                         log::warn!("Channel is full, dropping transaction");
-    //                     } else {
-    //                         log::error!("Channel is closed: {:?}", e);
-    //                         return Err(anyhow::anyhow!("Channel is closed: {:?}", e));
-    //                     }
-    //                 }
-    //             }
-    //             BackpressureStrategy::Retry { max_attempts, wait_ms } => {
-    //                 // 重试有限次数
-    //                 let mut retry_count = 0;
-    //                 loop {
-    //                     match tx.try_send(event_pretty.clone()) {
-    //                         Ok(_) => break,
-    //                         Err(e) => {
-    //                             if e.is_full() {
-    //                                 retry_count += 1;
-    //                                 if retry_count >= max_attempts {
-    //                                     log::warn!(
-    //                                         "Channel is full after {} attempts, dropping transaction",
-    //                                         retry_count
-    //                                     );
-    //                                     break;
-    //                                 }
-    //                                 tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms))
-    //                                     .await;
-    //                             } else {
-    //                                 log::error!("Channel is closed: {:?}", e);
-    //                                 return Err(anyhow::anyhow!("Channel is closed: {:?}", e));
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         Ok(())
-    //     }
+    pub async fn handle_stream_system_message(
+        msg: SubscribeUpdate,
+        subscribe_tx: &mut (impl Sink<SubscribeRequest, Error = mpsc::SendError> + Unpin),
+    ) -> AnyResult<Option<EventPretty>> {
+        let created_at = msg.created_at;
+        let event_pretty = match msg.update_oneof {
+            Some(UpdateOneof::Transaction(sut)) => Some(TransactionPretty::from((sut, created_at))),
+            Some(UpdateOneof::Ping(_)) => {
+                subscribe_tx
+                    .send(SubscribeRequest {
+                        ping: Some(SubscribeRequestPing { id: 1 }),
+                        ..Default::default()
+                    })
+                    .await?;
+                None
+            }
+            Some(UpdateOneof::Pong(_)) => None,
+            _ => None,
+        };
+        Ok(event_pretty.map(|e| EventPretty::Transaction(e)))
+    }
 }

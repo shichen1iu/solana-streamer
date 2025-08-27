@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use futures::StreamExt;
 use solana_sdk::pubkey::Pubkey;
 
@@ -39,8 +41,9 @@ impl ShredStreamGrpc {
         event_processor.set_protocols_and_event_type_filter(
             protocols,
             event_type_filter,
-            self.config.backpressure.strategy,
+            self.config.backpressure.clone(),
             self.config.batch.clone(),
+            Some(Arc::new(callback)),
         );
 
         // 启动流处理
@@ -61,7 +64,6 @@ impl ShredStreamGrpc {
                                         .process_shred_transaction_immediate(
                                             transaction_with_slot,
                                             bot_wallet,
-                                            &callback,
                                         )
                                         .await
                                     {
@@ -82,11 +84,7 @@ impl ShredStreamGrpc {
         });
 
         // 保存订阅句柄
-        let subscription_handle = SubscriptionHandle::new(
-            stream_task,
-            event_processor.get_event_handle(),
-            metrics_handle,
-        );
+        let subscription_handle = SubscriptionHandle::new(stream_task, None, metrics_handle);
         let mut handle_guard = self.subscription_handle.lock().await;
         *handle_guard = Some(subscription_handle);
 

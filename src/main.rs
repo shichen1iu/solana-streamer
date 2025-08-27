@@ -86,13 +86,17 @@ async fn test_grpc() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Protocols to monitor: {:?}", protocols);
 
+    const SYSTEM_PROGRAM_ID: solana_sdk::pubkey::Pubkey =
+        solana_sdk::pubkey!("11111111111111111111111111111111");
+
     // Filter accounts
     let account_include = vec![
-        PUMPFUN_PROGRAM_ID.to_string(),        // Listen to pumpfun program ID
-        PUMPSWAP_PROGRAM_ID.to_string(),       // Listen to pumpswap program ID
-        BONK_PROGRAM_ID.to_string(),           // Listen to bonk program ID
-        RAYDIUM_CPMM_PROGRAM_ID.to_string(),   // Listen to raydium_cpmm program ID
-        RAYDIUM_CLMM_PROGRAM_ID.to_string(),   // Listen to raydium_clmm program ID
+        SYSTEM_PROGRAM_ID.to_string(),
+        PUMPFUN_PROGRAM_ID.to_string(), // Listen to pumpfun program ID
+        PUMPSWAP_PROGRAM_ID.to_string(), // Listen to pumpswap program ID
+        BONK_PROGRAM_ID.to_string(),    // Listen to bonk program ID
+        RAYDIUM_CPMM_PROGRAM_ID.to_string(), // Listen to raydium_cpmm program ID
+        RAYDIUM_CLMM_PROGRAM_ID.to_string(), // Listen to raydium_clmm program ID
         RAYDIUM_AMM_V4_PROGRAM_ID.to_string(), // Listen to raydium_amm_v4 program ID
     ];
     let account_exclude = vec![];
@@ -151,7 +155,7 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     // Enable performance monitoring, has performance overhead, disabled by default
     config.enable_metrics = true;
     let shred_stream =
-        ShredStreamGrpc::new_with_config("http://127.0.0.1:10800".to_string(), config).await?;
+        ShredStreamGrpc::new_with_config("http://64.130.37.195:10800".to_string(), config).await?;
 
     let callback = create_event_callback();
     let protocols = vec![
@@ -188,17 +192,11 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
 
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
     |event: Box<dyn UnifiedEvent>| {
-        println!(
-            "🎉 Event received! Type: {:?}, ID: {}, Slot: {}, Transaction Index: {:?}",
-            event.event_type(),
-            event.id(),
-            event.slot(),
-            event.transaction_index(),
-        );
+        println!("🎉 Event received! Type: {:?}, ID: {}", event.event_type(), event.id());
         match_event!(event, {
             // -------------------------- block meta -----------------------
             BlockMetaEvent => |e: BlockMetaEvent| {
-                println!("BlockMetaEvent: {e:?}");
+                println!("BlockMetaEvent: {:?}", e.metadata.program_handle_time_consuming_us);
             },
             // -------------------------- bonk -----------------------
             BonkPoolCreateEvent => |e: BonkPoolCreateEvent| {

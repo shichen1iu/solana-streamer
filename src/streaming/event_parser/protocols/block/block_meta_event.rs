@@ -28,7 +28,8 @@ impl BlockMetaEvent {
             crate::streaming::event_parser::common::types::ProtocolType::Common,
             EventType::BlockMeta,
             solana_sdk::pubkey::Pubkey::default(),
-            "".to_string(),
+            0,
+            None,
             program_received_time_us,
         );
         Self { metadata, slot, block_hash }

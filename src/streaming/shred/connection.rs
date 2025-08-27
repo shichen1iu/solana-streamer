@@ -29,10 +29,8 @@ impl ShredStreamGrpc {
     pub async fn new_with_config(endpoint: String, config: StreamClientConfig) -> AnyResult<Self> {
         let shredstream_client = ShredstreamProxyClient::connect(endpoint.clone()).await?;
         let metrics = Arc::new(RwLock::new(PerformanceMetrics::new()));
-        let config_arc = Arc::new(config.clone());
 
-        let metrics_manager =
-            MetricsManager::new(metrics.clone(), config_arc, "ShredStream".to_string());
+        let metrics_manager = MetricsManager::new(config.enable_metrics, "ShredStream".to_string());
 
         Ok(Self {
             shredstream_client: Arc::new(shredstream_client),

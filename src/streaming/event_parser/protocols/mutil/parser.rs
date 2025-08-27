@@ -79,7 +79,8 @@ impl EventParser for MutilEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_inner_instruction(
             inner_instruction,
@@ -87,7 +88,8 @@ impl EventParser for MutilEventParser {
             slot,
             block_time,
             program_received_time_us,
-            index,
+            outer_index,
+            inner_index,
         )
     }
 
@@ -99,7 +101,8 @@ impl EventParser for MutilEventParser {
         slot: u64,
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
-        index: String,
+        outer_index: i64,
+        inner_index: Option<i64>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         self.inner.parse_events_from_instruction(
             instruction,
@@ -108,7 +111,8 @@ impl EventParser for MutilEventParser {
             slot,
             block_time,
             program_received_time_us,
-            index,
+            outer_index,
+            inner_index,
         )
     }
 
