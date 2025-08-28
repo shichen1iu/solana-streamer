@@ -115,21 +115,20 @@ impl EventProcessor {
                         transaction_pretty.block_time,
                         transaction_pretty.program_received_time_us,
                         bot_wallet,
+                        transaction_pretty.transaction_index,
                     )
                     .await
                     .unwrap_or_else(|_e| vec![]);
 
-                let mut max_time_consuming_us = 0;
+                let mut all_time_consuming_us = 0;
                 let event_count = all_events.len();
 
                 // 为所有事件设置交易索引
                 for mut event in all_events {
-                    event.set_transaction_index(transaction_pretty.transaction_index);
                     event.set_program_handle_time_consuming_us(
                         chrono::Utc::now().timestamp_micros() - event.program_received_time_us(),
                     );
-                    max_time_consuming_us =
-                        max_time_consuming_us.max(event.program_handle_time_consuming_us());
+                    all_time_consuming_us += event.program_handle_time_consuming_us();
                     self.invoke_callback(event);
                 }
 
@@ -137,7 +136,7 @@ impl EventProcessor {
                 self.update_metrics(
                     MetricsEventType::Transaction,
                     event_count as u64,
-                    max_time_consuming_us as f64,
+                    all_time_consuming_us as f64,
                     Some(signature),
                 );
             }
@@ -199,6 +198,7 @@ impl EventProcessor {
                 None,
                 program_received_time_us,
                 bot_wallet,
+                None,
             )
             .await
             .unwrap_or_else(|_e| vec![]);

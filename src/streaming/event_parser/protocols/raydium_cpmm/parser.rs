@@ -1,14 +1,14 @@
-use std::collections::HashMap;
+use solana_sdk::pubkey::Pubkey;
 
-use prost_types::Timestamp;
-use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey, signature::Signature};
-
-use crate::streaming::event_parser::{
-    common::{read_u64_le, EventMetadata, EventType, ProtocolType},
-    core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
-    protocols::raydium_cpmm::{
-        discriminators, RaydiumCpmmDepositEvent, RaydiumCpmmInitializeEvent, RaydiumCpmmSwapEvent,
-        RaydiumCpmmWithdrawEvent,
+use crate::{
+    impl_event_parser_delegate,
+    streaming::event_parser::{
+        common::{read_u64_le, EventMetadata, EventType, ProtocolType},
+        core::traits::{GenericEventParseConfig, GenericEventParser, UnifiedEvent},
+        protocols::raydium_cpmm::{
+            discriminators, RaydiumCpmmDepositEvent, RaydiumCpmmInitializeEvent,
+            RaydiumCpmmSwapEvent, RaydiumCpmmWithdrawEvent,
+        },
     },
 };
 
@@ -34,7 +34,7 @@ impl RaydiumCpmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CPMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumCpmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::SWAP_BASE_IN,
                 event_type: EventType::RaydiumCpmmSwapBaseInput,
                 inner_instruction_parser: None,
@@ -43,7 +43,7 @@ impl RaydiumCpmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CPMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumCpmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::SWAP_BASE_OUT,
                 event_type: EventType::RaydiumCpmmSwapBaseOutput,
                 inner_instruction_parser: None,
@@ -52,7 +52,7 @@ impl RaydiumCpmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CPMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumCpmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::DEPOSIT,
                 event_type: EventType::RaydiumCpmmDeposit,
                 inner_instruction_parser: None,
@@ -61,7 +61,7 @@ impl RaydiumCpmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CPMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumCpmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::INITIALIZE,
                 event_type: EventType::RaydiumCpmmInitialize,
                 inner_instruction_parser: None,
@@ -70,7 +70,7 @@ impl RaydiumCpmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CPMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumCpmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::WITHDRAW,
                 event_type: EventType::RaydiumCpmmWithdraw,
                 inner_instruction_parser: None,
@@ -267,63 +267,4 @@ impl RaydiumCpmmEventParser {
     }
 }
 
-#[async_trait::async_trait]
-impl EventParser for RaydiumCpmmEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
-        self.inner.inner_instruction_configs()
-    }
-    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        self.inner.instruction_configs()
-    }
-    fn parse_events_from_inner_instruction(
-        &self,
-        inner_instruction: &CompiledInstruction,
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_inner_instruction(
-            inner_instruction,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn parse_events_from_instruction(
-        &self,
-        instruction: &CompiledInstruction,
-        accounts: &[Pubkey],
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_instruction(
-            instruction,
-            accounts,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn should_handle(&self, program_id: &Pubkey) -> bool {
-        self.inner.should_handle(program_id)
-    }
-
-    fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
-    }
-}
+impl_event_parser_delegate!(RaydiumCpmmEventParser);

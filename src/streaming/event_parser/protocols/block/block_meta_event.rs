@@ -31,6 +31,7 @@ impl BlockMetaEvent {
             0,
             None,
             program_received_time_us,
+            None,
         );
         Self { metadata, slot, block_hash }
     }

@@ -1,16 +1,16 @@
-use std::collections::HashMap;
+use solana_sdk::pubkey::Pubkey;
 
-use prost_types::Timestamp;
-use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey, signature::Signature};
-
-use crate::streaming::event_parser::{
-    common::{utils::*, EventMetadata, EventType, ProtocolType},
-    core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
-    protocols::bonk::{
-        bonk_pool_create_event_log_decode, bonk_trade_event_log_decode, discriminators, AmmFeeOn,
-        BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent, BonkPoolCreateEvent, BonkTradeEvent,
-        ConstantCurve, CurveParams, FixedCurve, LinearCurve, MintParams, TradeDirection,
-        VestingParams,
+use crate::{
+    impl_event_parser_delegate,
+    streaming::event_parser::{
+        common::{utils::*, EventMetadata, EventType, ProtocolType},
+        core::traits::{GenericEventParseConfig, GenericEventParser, UnifiedEvent},
+        protocols::bonk::{
+            bonk_pool_create_event_log_decode, bonk_trade_event_log_decode, discriminators,
+            AmmFeeOn, BonkMigrateToAmmEvent, BonkMigrateToCpswapEvent, BonkPoolCreateEvent,
+            BonkTradeEvent, ConstantCurve, CurveParams, FixedCurve, LinearCurve, MintParams,
+            TradeDirection, VestingParams,
+        },
     },
 };
 
@@ -90,7 +90,7 @@ impl BonkEventParser {
             GenericEventParseConfig {
                 program_id: BONK_PROGRAM_ID,
                 protocol_type: ProtocolType::Bonk,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::MIGRATE_TO_AMM,
                 event_type: EventType::BonkMigrateToAmm,
                 inner_instruction_parser: None,
@@ -99,7 +99,7 @@ impl BonkEventParser {
             GenericEventParseConfig {
                 program_id: BONK_PROGRAM_ID,
                 protocol_type: ProtocolType::Bonk,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::MIGRATE_TO_CP_SWAP,
                 event_type: EventType::BonkMigrateToCpswap,
                 inner_instruction_parser: None,
@@ -603,63 +603,4 @@ impl BonkEventParser {
     }
 }
 
-#[async_trait::async_trait]
-impl EventParser for BonkEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
-        self.inner.inner_instruction_configs()
-    }
-    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        self.inner.instruction_configs()
-    }
-    fn parse_events_from_inner_instruction(
-        &self,
-        inner_instruction: &CompiledInstruction,
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_inner_instruction(
-            inner_instruction,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn parse_events_from_instruction(
-        &self,
-        instruction: &CompiledInstruction,
-        accounts: &[Pubkey],
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_instruction(
-            instruction,
-            accounts,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn should_handle(&self, program_id: &Pubkey) -> bool {
-        self.inner.should_handle(program_id)
-    }
-
-    fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
-    }
-}
+impl_event_parser_delegate!(BonkEventParser);

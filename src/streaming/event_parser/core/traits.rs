@@ -68,16 +68,13 @@ pub trait UnifiedEvent: Debug + Send + Sync {
 
     /// Get transaction index in slot
     fn transaction_index(&self) -> Option<u64>;
-
-    /// Set transaction index in slot
-    fn set_transaction_index(&mut self, transaction_index: Option<u64>);
 }
 
 /// 事件解析器trait - 定义了事件解析的核心方法
 #[async_trait::async_trait]
 pub trait EventParser: Send + Sync {
     /// 获取内联指令解析配置
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>>;
+    fn inner_instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>>;
     /// 获取指令解析配置
     fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>>;
     /// 从内联指令中解析事件数据
@@ -91,6 +88,8 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从指令中解析事件数据
@@ -105,6 +104,8 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从VersionedTransaction中解析指令事件的通用方法
@@ -118,6 +119,8 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         accounts: &[Pubkey],
         inner_instructions: &[InnerInstructions],
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         // 预分配容量，避免动态扩容
         let mut instruction_events = Vec::with_capacity(16);
@@ -149,6 +152,8 @@ pub trait EventParser: Send + Sync {
                                 program_received_time_us,
                                 index as i64,
                                 None,
+                                bot_wallet,
+                                Some(index as u64),
                             )
                             .await
                         {
@@ -188,6 +193,7 @@ pub trait EventParser: Send + Sync {
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
         bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let accounts: Vec<Pubkey> = versioned_tx.message.static_account_keys().to_vec();
         let events = self
@@ -199,6 +205,8 @@ pub trait EventParser: Send + Sync {
                 program_received_time_us,
                 &accounts,
                 &[],
+                bot_wallet,
+                transaction_index,
             )
             .await
             .unwrap_or_else(|_e| vec![]);
@@ -213,6 +221,7 @@ pub trait EventParser: Send + Sync {
         block_time: Option<Timestamp>,
         program_received_time_us: i64,
         bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let versioned_tx = tx.get_transaction();
         let meta = tx.get_status_meta();
@@ -254,6 +263,8 @@ pub trait EventParser: Send + Sync {
                 program_received_time_us,
                 &accounts_for_task1,
                 &inner_instructions_for_task1,
+                bot_wallet,
+                transaction_index,
             )
             .await
             .unwrap_or_else(|_e| vec![])
@@ -305,6 +316,8 @@ pub trait EventParser: Send + Sync {
                         *program_received_time_us,
                         *outer_index,
                         *inner_index,
+                        bot_wallet,
+                        transaction_index,
                     )
                     .await
                 {
@@ -348,6 +361,8 @@ pub trait EventParser: Send + Sync {
                         *program_received_time_us,
                         *outer_index,
                         *inner_index,
+                        bot_wallet,
+                        transaction_index,
                     )
                     .await
                 {
@@ -496,6 +511,8 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
         let events = self.parse_events_from_inner_instruction(
@@ -506,6 +523,8 @@ pub trait EventParser: Send + Sync {
             program_received_time_us,
             outer_index,
             inner_index,
+            bot_wallet,
+            transaction_index,
         );
         Ok(events)
     }
@@ -521,6 +540,8 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
         let events = self.parse_events_from_instruction(
@@ -532,6 +553,8 @@ pub trait EventParser: Send + Sync {
             program_received_time_us,
             outer_index,
             inner_index,
+            bot_wallet,
+            transaction_index,
         );
         Ok(events)
     }
@@ -555,7 +578,7 @@ impl Clone for Box<dyn UnifiedEvent> {
 pub struct GenericEventParseConfig {
     pub program_id: Pubkey,
     pub protocol_type: ProtocolType,
-    pub inner_instruction_discriminator: &'static str,
+    pub inner_instruction_discriminator: &'static [u8],
     pub instruction_discriminator: &'static [u8],
     pub event_type: EventType,
     pub inner_instruction_parser: Option<InnerInstructionEventParser>,
@@ -573,7 +596,7 @@ pub type InstructionEventParser =
 /// 通用事件解析器基类
 pub struct GenericEventParser {
     pub program_ids: Vec<Pubkey>,
-    pub inner_instruction_configs: HashMap<&'static str, Vec<GenericEventParseConfig>>,
+    pub inner_instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
     pub instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
 }
 
@@ -585,10 +608,12 @@ impl GenericEventParser {
         let mut instruction_configs = HashMap::with_capacity(configs.len());
 
         for config in configs {
-            inner_instruction_configs
-                .entry(config.inner_instruction_discriminator)
-                .or_insert_with(Vec::new)
-                .push(config.clone());
+            if config.inner_instruction_discriminator.len() > 0 {
+                inner_instruction_configs
+                    .entry(config.inner_instruction_discriminator.to_vec())
+                    .or_insert_with(Vec::new)
+                    .push(config.clone());
+            }
             instruction_configs
                 .entry(config.instruction_discriminator.to_vec())
                 .or_insert_with(Vec::new)
@@ -610,6 +635,7 @@ impl GenericEventParser {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        transaction_index: Option<u64>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(parser) = config.inner_instruction_parser {
             let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
@@ -626,6 +652,7 @@ impl GenericEventParser {
                 outer_index,
                 inner_index,
                 program_received_time_us,
+                transaction_index,
             );
             parser(data, metadata)
         } else {
@@ -646,6 +673,7 @@ impl GenericEventParser {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        transaction_index: Option<u64>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(parser) = config.instruction_parser {
             let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
@@ -662,6 +690,7 @@ impl GenericEventParser {
                 outer_index,
                 inner_index,
                 program_received_time_us,
+                transaction_index,
             );
             parser(data, account_pubkeys, metadata)
         } else {
@@ -672,7 +701,7 @@ impl GenericEventParser {
 
 #[async_trait::async_trait]
 impl EventParser for GenericEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
+    fn inner_instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
         // 返回引用而非克隆，减少内存分配
         self.inner_instruction_configs.clone()
     }
@@ -691,17 +720,16 @@ impl EventParser for GenericEventParser {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        let inner_instruction_data_decoded = inner_instruction.data.clone();
-        if inner_instruction_data_decoded.len() < 16 {
+        if inner_instruction.data.len() < 16 {
             return Vec::new();
         }
-        let inner_instruction_data_decoded_str =
-            format!("0x{}", hex::encode(&inner_instruction_data_decoded));
-        let data = &inner_instruction_data_decoded[16..];
+        let data = &inner_instruction.data[16..];
         let mut events = Vec::new();
         for (disc, configs) in &self.inner_instruction_configs {
-            if discriminator_matches(&inner_instruction_data_decoded_str, disc) {
+            if data == disc {
                 for config in configs {
                     if let Some(event) = self.parse_inner_instruction_event(
                         config,
@@ -712,6 +740,7 @@ impl EventParser for GenericEventParser {
                         program_received_time_us,
                         outer_index,
                         inner_index,
+                        transaction_index,
                     ) {
                         events.push(event);
                     }
@@ -733,6 +762,8 @@ impl EventParser for GenericEventParser {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         let program_id = accounts[instruction.program_id_index as usize];
         if !self.should_handle(&program_id) {
@@ -767,6 +798,7 @@ impl EventParser for GenericEventParser {
                         program_received_time_us,
                         outer_index,
                         inner_index,
+                        transaction_index,
                     ) {
                         events.push(event);
                     }

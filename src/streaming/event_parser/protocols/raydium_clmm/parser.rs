@@ -1,19 +1,19 @@
-use std::collections::HashMap;
+use solana_sdk::pubkey::Pubkey;
 
-use prost_types::Timestamp;
-use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey, signature::Signature};
-
-use crate::streaming::event_parser::{
-    common::{
-        read_i32_le, read_option_bool, read_u128_le, read_u64_le, read_u8_le, EventMetadata,
-        EventType, ProtocolType,
-    },
-    core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
-    protocols::raydium_clmm::{
-        discriminators, RaydiumClmmClosePositionEvent, RaydiumClmmCreatePoolEvent,
-        RaydiumClmmDecreaseLiquidityV2Event, RaydiumClmmIncreaseLiquidityV2Event,
-        RaydiumClmmOpenPositionV2Event, RaydiumClmmOpenPositionWithToken22NftEvent,
-        RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
+use crate::{
+    impl_event_parser_delegate,
+    streaming::event_parser::{
+        common::{
+            read_i32_le, read_option_bool, read_u128_le, read_u64_le, read_u8_le, EventMetadata,
+            EventType, ProtocolType,
+        },
+        core::traits::{GenericEventParseConfig, GenericEventParser, UnifiedEvent},
+        protocols::raydium_clmm::{
+            discriminators, RaydiumClmmClosePositionEvent, RaydiumClmmCreatePoolEvent,
+            RaydiumClmmDecreaseLiquidityV2Event, RaydiumClmmIncreaseLiquidityV2Event,
+            RaydiumClmmOpenPositionV2Event, RaydiumClmmOpenPositionWithToken22NftEvent,
+            RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event,
+        },
     },
 };
 
@@ -39,7 +39,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::SWAP,
                 event_type: EventType::RaydiumClmmSwap,
                 inner_instruction_parser: None,
@@ -48,7 +48,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::SWAP_V2,
                 event_type: EventType::RaydiumClmmSwapV2,
                 inner_instruction_parser: None,
@@ -57,7 +57,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::CLOSE_POSITION,
                 event_type: EventType::RaydiumClmmClosePosition,
                 inner_instruction_parser: None,
@@ -66,7 +66,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::DECREASE_LIQUIDITY_V2,
                 event_type: EventType::RaydiumClmmDecreaseLiquidityV2,
                 inner_instruction_parser: None,
@@ -75,7 +75,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::CREATE_POOL,
                 event_type: EventType::RaydiumClmmCreatePool,
                 inner_instruction_parser: None,
@@ -84,7 +84,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::INCREASE_LIQUIDITY_V2,
                 event_type: EventType::RaydiumClmmIncreaseLiquidityV2,
                 inner_instruction_parser: None,
@@ -93,7 +93,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::OPEN_POSITION_WITH_TOKEN_22_NFT,
                 event_type: EventType::RaydiumClmmOpenPositionWithToken22Nft,
                 inner_instruction_parser: None,
@@ -102,7 +102,7 @@ impl RaydiumClmmEventParser {
             GenericEventParseConfig {
                 program_id: RAYDIUM_CLMM_PROGRAM_ID,
                 protocol_type: ProtocolType::RaydiumClmm,
-                inner_instruction_discriminator: "",
+                inner_instruction_discriminator: &[],
                 instruction_discriminator: discriminators::OPEN_POSITION_V2,
                 event_type: EventType::RaydiumClmmOpenPositionV2,
                 inner_instruction_parser: None,
@@ -417,63 +417,4 @@ impl RaydiumClmmEventParser {
     }
 }
 
-#[async_trait::async_trait]
-impl EventParser for RaydiumClmmEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
-        self.inner.inner_instruction_configs()
-    }
-    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        self.inner.instruction_configs()
-    }
-    fn parse_events_from_inner_instruction(
-        &self,
-        inner_instruction: &CompiledInstruction,
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_inner_instruction(
-            inner_instruction,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn parse_events_from_instruction(
-        &self,
-        instruction: &CompiledInstruction,
-        accounts: &[Pubkey],
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_instruction(
-            instruction,
-            accounts,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn should_handle(&self, program_id: &Pubkey) -> bool {
-        self.inner.should_handle(program_id)
-    }
-
-    fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
-    }
-}
+impl_event_parser_delegate!(RaydiumClmmEventParser);

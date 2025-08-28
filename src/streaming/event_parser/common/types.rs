@@ -323,12 +323,12 @@ impl EventMetadata {
         instruction_outer_index: i64,
         instruction_inner_index: Option<i64>,
         program_received_time_us: i64,
+        transaction_index: Option<u64>,
     ) -> Self {
         Self {
             id,
             signature,
             slot,
-            transaction_index: None, // 默认为None，后续设置
             block_time,
             block_time_ms,
             program_received_time_us,
@@ -339,6 +339,7 @@ impl EventMetadata {
             swap_data: None,
             instruction_outer_index,
             instruction_inner_index,
+            transaction_index,
         }
     }
 
@@ -348,11 +349,6 @@ impl EventMetadata {
 
     pub fn set_swap_data(&mut self, swap_data: SwapData) {
         self.swap_data = Some(swap_data);
-    }
-
-    /// 设置交易索引
-    pub fn set_transaction_index(&mut self, transaction_index: Option<u64>) {
-        self.transaction_index = transaction_index;
     }
 
     /// Recycle EventMetadata to object pool

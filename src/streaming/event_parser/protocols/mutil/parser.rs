@@ -1,13 +1,10 @@
-use std::collections::HashMap;
-
-use prost_types::Timestamp;
-use solana_sdk::signature::Signature;
-use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
-
-use crate::streaming::event_parser::common::filter::EventTypeFilter;
-use crate::streaming::event_parser::{
-    core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
-    EventParserFactory, Protocol,
+use crate::{
+    impl_event_parser_delegate,
+    streaming::event_parser::{
+        common::filter::EventTypeFilter,
+        core::traits::{GenericEventParseConfig, GenericEventParser},
+        EventParserFactory, Protocol,
+    },
 };
 
 pub struct MutilEventParser {
@@ -64,63 +61,4 @@ impl MutilEventParser {
     }
 }
 
-#[async_trait::async_trait]
-impl EventParser for MutilEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
-        self.inner.inner_instruction_configs()
-    }
-    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        self.inner.instruction_configs()
-    }
-    fn parse_events_from_inner_instruction(
-        &self,
-        inner_instruction: &CompiledInstruction,
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_inner_instruction(
-            inner_instruction,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn parse_events_from_instruction(
-        &self,
-        instruction: &CompiledInstruction,
-        accounts: &[Pubkey],
-        signature: Signature,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_us: i64,
-        outer_index: i64,
-        inner_index: Option<i64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_instruction(
-            instruction,
-            accounts,
-            signature,
-            slot,
-            block_time,
-            program_received_time_us,
-            outer_index,
-            inner_index,
-        )
-    }
-
-    fn should_handle(&self, program_id: &Pubkey) -> bool {
-        self.inner.should_handle(program_id)
-    }
-
-    fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
-    }
-}
+impl_event_parser_delegate!(MutilEventParser);

@@ -76,10 +76,6 @@ macro_rules! impl_unified_event {
             fn transaction_index(&self) -> Option<u64> {
                 self.metadata.transaction_index
             }
-
-            fn set_transaction_index(&mut self, transaction_index: Option<u64>) {
-                self.metadata.set_transaction_index(transaction_index);
-            }
         }
     };
 }
