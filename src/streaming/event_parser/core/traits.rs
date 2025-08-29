@@ -1,15 +1,23 @@
-use anyhow::Result;
 use prost_types::Timestamp;
+use solana_sdk::bs58;
 use solana_sdk::signature::Signature;
 use solana_sdk::{
     instruction::CompiledInstruction, pubkey::Pubkey, transaction::VersionedTransaction,
 };
-use solana_transaction_status::{InnerInstructions, TransactionWithStatusMeta};
+use solana_transaction_status::{
+    EncodedConfirmedTransactionWithStatusMeta, InnerInstruction, InnerInstructions,
+    TransactionWithStatusMeta, UiInstruction,
+};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use super::global_state::{add_dev_address, is_dev_address, update_slot};
+
 use crate::streaming::event_parser::common::{parse_swap_data_from_next_instructions, SwapData};
+use crate::streaming::event_parser::core::global_state::{
+    add_bonk_dev_address, is_bonk_dev_address,
+};
 use crate::streaming::event_parser::protocols::pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent};
 use crate::streaming::event_parser::{
     common::{utils::*, EventMetadata, EventType, ProtocolType},
@@ -73,8 +81,6 @@ pub trait UnifiedEvent: Debug + Send + Sync {
 /// 事件解析器trait - 定义了事件解析的核心方法
 #[async_trait::async_trait]
 pub trait EventParser: Send + Sync {
-    /// 获取内联指令解析配置
-    fn inner_instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>>;
     /// 获取指令解析配置
     fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>>;
     /// 从内联指令中解析事件数据
@@ -88,8 +94,8 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
-        bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
+        config: &GenericEventParseConfig,
     ) -> Vec<Box<dyn UnifiedEvent>>;
 
     /// 从指令中解析事件数据
@@ -106,7 +112,9 @@ pub trait EventParser: Send + Sync {
         inner_index: Option<i64>,
         bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Vec<Box<dyn UnifiedEvent>>;
+        inner_instructions: Option<&InnerInstructions>,
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()>;
 
     /// 从VersionedTransaction中解析指令事件的通用方法
     #[allow(clippy::too_many_arguments)]
@@ -121,13 +129,11 @@ pub trait EventParser: Send + Sync {
         inner_instructions: &[InnerInstructions],
         bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
-        // 预分配容量，避免动态扩容
-        let mut instruction_events = Vec::with_capacity(16);
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
         // 获取交易的指令和账户
         let compiled_instructions = transaction.message.instructions();
         let mut accounts: Vec<Pubkey> = accounts.to_vec();
-
         // 检查交易中是否包含程序
         let has_program = accounts.iter().any(|account| self.should_handle(account));
         if has_program {
@@ -142,47 +148,60 @@ pub trait EventParser: Send + Sync {
                                 accounts.push(Pubkey::default());
                             }
                         }
-                        if let Ok(mut events) = self
-                            .parse_instruction(
-                                instruction,
-                                &accounts,
-                                signature,
-                                slot,
-                                block_time,
-                                program_received_time_us,
-                                index as i64,
-                                None,
-                                bot_wallet,
-                                Some(index as u64),
-                            )
-                            .await
-                        {
-                            if !events.is_empty() {
-                                if let Some(inn) =
-                                    inner_instructions.iter().find(|inner_instruction| {
-                                        inner_instruction.index == index as u8
-                                    })
-                                {
-                                    events.iter_mut().for_each(|event| {
-                                        let swap_data = parse_swap_data_from_next_instructions(
-                                            event.as_ref(),
-                                            inn,
-                                            -1_i8,
-                                            &accounts,
-                                        );
-                                        if let Some(swap_data) = swap_data {
-                                            event.set_swap_data(swap_data);
-                                        }
-                                    });
-                                }
-                                instruction_events.extend(events);
-                            }
-                        }
+                        let inner_instructions = inner_instructions
+                            .iter()
+                            .find(|inner_instruction| inner_instruction.index == index as u8);
+                        self.parse_instruction(
+                            instruction,
+                            &accounts,
+                            signature,
+                            slot,
+                            block_time,
+                            program_received_time_us,
+                            index as i64,
+                            None,
+                            bot_wallet,
+                            transaction_index,
+                            inner_instructions,
+                            Arc::clone(&callback),
+                        )
+                        .await?;
                     }
                 }
             }
         }
-        Ok(instruction_events)
+        Ok(())
+    }
+
+    async fn parse_versioned_transaction_owned(
+        &self,
+        versioned_tx: VersionedTransaction,
+        signature: Signature,
+        slot: Option<u64>,
+        block_time: Option<Timestamp>,
+        program_received_time_us: i64,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
+        inner_instructions: &[InnerInstructions],
+        callback: Arc<dyn Fn(Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        // 创建适配器回调，将所有权回调转换为引用回调
+        let adapter_callback = Arc::new(move |event: &Box<dyn UnifiedEvent>| {
+            callback(event.clone_boxed());
+        });
+        self.parse_versioned_transaction(
+            &versioned_tx,
+            signature,
+            slot,
+            block_time,
+            program_received_time_us,
+            bot_wallet,
+            transaction_index,
+            inner_instructions,
+            adapter_callback,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn parse_versioned_transaction(
@@ -194,23 +213,54 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
+        inner_instructions: &[InnerInstructions],
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
         let accounts: Vec<Pubkey> = versioned_tx.message.static_account_keys().to_vec();
-        let events = self
-            .parse_instruction_events_from_versioned_transaction(
-                versioned_tx,
-                signature,
-                slot,
-                block_time,
-                program_received_time_us,
-                &accounts,
-                &[],
-                bot_wallet,
-                transaction_index,
-            )
-            .await
-            .unwrap_or_else(|_e| vec![]);
-        Ok(self.process_events(events, bot_wallet))
+        self.parse_instruction_events_from_versioned_transaction(
+            versioned_tx,
+            signature,
+            slot,
+            block_time,
+            program_received_time_us,
+            &accounts,
+            inner_instructions,
+            bot_wallet,
+            transaction_index,
+            callback,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 解析交易，使用所有权语义的回调以避免不必要的克隆
+    async fn parse_transaction_owned(
+        &self,
+        tx: TransactionWithStatusMeta,
+        signature: Signature,
+        slot: Option<u64>,
+        block_time: Option<Timestamp>,
+        program_received_time_us: i64,
+        bot_wallet: Option<Pubkey>,
+        transaction_index: Option<u64>,
+        callback: Arc<dyn Fn(Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        // 创建适配器回调，将所有权回调转换为引用回调
+        let adapter_callback = Arc::new(move |event: &Box<dyn UnifiedEvent>| {
+            callback(event.clone_boxed());
+        });
+        // 调用原始方法
+        self.parse_transaction(
+            tx,
+            signature,
+            slot,
+            block_time,
+            program_received_time_us,
+            bot_wallet,
+            transaction_index,
+            adapter_callback,
+        )
+        .await
     }
 
     async fn parse_transaction(
@@ -222,10 +272,10 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
         let versioned_tx = tx.get_transaction();
         let meta = tx.get_status_meta();
-
         let mut address_table_lookups: Vec<Pubkey> = vec![];
         let mut inner_instructions: Vec<InnerInstructions> = vec![];
         if let Some(meta) = meta {
@@ -237,269 +287,183 @@ pub trait EventParser: Send + Sync {
                 meta.loaded_addresses.writable.into_iter().chain(meta.loaded_addresses.readonly),
             );
         }
-
         let mut accounts = Vec::with_capacity(
             versioned_tx.message.static_account_keys().len() + address_table_lookups.len(),
         );
         accounts.extend_from_slice(versioned_tx.message.static_account_keys());
         accounts.extend(address_table_lookups);
-
         // 使用 Arc 包装共享数据，避免不必要的克隆
         let accounts_arc = Arc::new(accounts);
         let inner_instructions_arc = Arc::new(inner_instructions);
+        // 解析指令事件
+        self.parse_instruction_events_from_versioned_transaction(
+            &versioned_tx,
+            signature,
+            slot,
+            block_time,
+            program_received_time_us,
+            &accounts_arc,
+            &inner_instructions_arc,
+            bot_wallet,
+            transaction_index,
+            callback.clone(),
+        )
+        .await?;
 
-        // 预分配容量，避免动态扩容
-        let mut instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(16);
-        let mut inner_instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(8);
-
-        let accounts_for_task1 = Arc::clone(&accounts_arc);
-        let inner_instructions_for_task1 = Arc::clone(&inner_instructions_arc);
-        let task1 = async move {
-            self.parse_instruction_events_from_versioned_transaction(
-                &versioned_tx,
-                signature,
-                slot,
-                block_time,
-                program_received_time_us,
-                &accounts_for_task1,
-                &inner_instructions_for_task1,
-                bot_wallet,
-                transaction_index,
-            )
-            .await
-            .unwrap_or_else(|_e| vec![])
-        };
-
-        // 解析内联指令事件
-        let inner_instructions_for_task2 = Arc::clone(&inner_instructions_arc);
-        let accounts_for_task2_1 = Arc::clone(&accounts_arc);
-        let accounts_for_task2_2 = Arc::clone(&accounts_arc);
-
-        let mut task2_params = Vec::with_capacity(inner_instructions_for_task2.len() * 5);
-        for inner_instruction in inner_instructions_for_task2.iter() {
+        // 解析嵌套指令事件
+        for inner_instruction in inner_instructions_arc.iter() {
             for (index, instruction) in inner_instruction.instructions.iter().enumerate() {
-                task2_params.push((
+                self.parse_instruction(
                     &instruction.instruction,
+                    &accounts_arc,
                     signature,
                     slot,
                     block_time,
                     program_received_time_us,
                     inner_instruction.index as i64,
                     Some(index as i64),
-                    inner_instruction,
-                ));
+                    bot_wallet,
+                    transaction_index,
+                    Some(&inner_instruction),
+                    callback.clone(),
+                )
+                .await?;
             }
         }
-        // 转换为 Arc<[T]> 更轻量
-        let task2_params: Arc<[_]> = task2_params.into();
-        let task2_params_clone = Arc::clone(&task2_params);
-        let task2_1 = async move {
-            let mut instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(16);
-            for (
-                instruction,
-                signature,
-                slot,
-                block_time,
-                program_received_time_us,
-                outer_index,
-                inner_index,
-                inner_instruction,
-            ) in task2_params_clone.iter()
-            {
-                if let Ok(mut events) = self
-                    .parse_instruction(
-                        instruction,
-                        &accounts_for_task2_1,
-                        *signature,
-                        *slot,
-                        *block_time,
-                        *program_received_time_us,
-                        *outer_index,
-                        *inner_index,
-                        bot_wallet,
-                        transaction_index,
-                    )
-                    .await
-                {
-                    if !events.is_empty() {
-                        events.iter_mut().for_each(|event| {
-                            let swap_data = parse_swap_data_from_next_instructions(
-                                event.as_ref(),
-                                &inner_instruction,
-                                inner_index.unwrap_or_default() as i8,
-                                &accounts_for_task2_1,
-                            );
-                            if let Some(swap_data) = swap_data {
-                                event.set_swap_data(swap_data);
-                            }
-                        });
-                        instruction_events.extend(events);
-                    }
-                }
-            }
-            instruction_events
-        };
-        let task2_2 = async move {
-            let mut inner_instruction_events: Vec<Box<dyn UnifiedEvent>> = Vec::with_capacity(8);
-            for (
-                instruction,
-                signature,
-                slot,
-                block_time,
-                program_received_time_us,
-                outer_index,
-                inner_index,
-                inner_instruction,
-            ) in task2_params.iter()
-            {
-                if let Ok(mut events) = self
-                    .parse_inner_instruction(
-                        instruction,
-                        *signature,
-                        *slot,
-                        *block_time,
-                        *program_received_time_us,
-                        *outer_index,
-                        *inner_index,
-                        bot_wallet,
-                        transaction_index,
-                    )
-                    .await
-                {
-                    if !events.is_empty() {
-                        events.iter_mut().for_each(|event| {
-                            let swap_data = parse_swap_data_from_next_instructions(
-                                event.as_ref(),
-                                &inner_instruction,
-                                inner_index.unwrap_or_default() as i8,
-                                &accounts_for_task2_2,
-                            );
-                            if let Some(swap_data) = swap_data {
-                                event.set_swap_data(swap_data);
-                            }
-                        });
-                        inner_instruction_events.extend(events);
-                    }
-                }
-            }
-            inner_instruction_events
-        };
 
-        let (r1, r2_1, r2_2) = tokio::join!(task1, task2_1, task2_2);
-        instruction_events.extend(r1);
-        instruction_events.extend(r2_1);
-        inner_instruction_events.extend(r2_2);
+        Ok(())
+    }
 
-        if !instruction_events.is_empty() && !inner_instruction_events.is_empty() {
-            for instruction_event in &mut instruction_events {
-                for inner_instruction_event in &inner_instruction_events {
-                    if instruction_event.id() == inner_instruction_event.id() {
-                        if instruction_event.instruction_inner_index().is_none()
-                            && inner_instruction_event.instruction_inner_index().is_some()
-                        {
-                            if inner_instruction_event.instruction_outer_index()
-                                == instruction_event.instruction_outer_index()
-                            {
-                                instruction_event.merge(inner_instruction_event.as_ref());
-                                break;
-                            }
-                        } else if instruction_event.instruction_inner_index().is_some()
-                            && inner_instruction_event.instruction_inner_index().is_some()
-                        {
-                            if instruction_event.instruction_outer_index()
-                                == inner_instruction_event.instruction_outer_index()
-                            {
-                                if inner_instruction_event
-                                    .instruction_inner_index()
-                                    .unwrap_or_default()
-                                    > instruction_event
-                                        .instruction_inner_index()
-                                        .unwrap_or_default()
-                                {
-                                    instruction_event.merge(inner_instruction_event.as_ref());
-                                    break;
-                                }
+    async fn parse_encoded_confirmed_transaction_with_status_meta(
+        &self,
+        signature: Signature,
+        transaction: EncodedConfirmedTransactionWithStatusMeta,
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        let versioned_tx = match transaction.transaction.transaction.decode() {
+            Some(tx) => tx,
+            None => {
+                println!("Failed to decode transaction");
+                return Ok(());
+            }
+        };
+        let mut inner_instructions_vec: Vec<InnerInstructions> = Vec::new();
+        if let Some(meta) = &transaction.transaction.meta {
+            // 从meta中获取inner_instructions，处理OptionSerializer类型
+            if let solana_transaction_status::option_serializer::OptionSerializer::Some(
+                ui_inner_insts,
+            ) = &meta.inner_instructions
+            {
+                // 将UiInnerInstructions转换为InnerInstructions
+                for ui_inner in ui_inner_insts {
+                    let mut converted_instructions = Vec::new();
+
+                    // 转换每个UiInstruction为InnerInstruction
+                    for ui_instruction in &ui_inner.instructions {
+                        if let UiInstruction::Compiled(ui_compiled) = ui_instruction {
+                            // 解码base58编码的data
+                            if let Ok(data) = bs58::decode(&ui_compiled.data).into_vec() {
+                                let compiled_instruction = CompiledInstruction {
+                                    program_id_index: ui_compiled.program_id_index,
+                                    accounts: ui_compiled.accounts.clone(),
+                                    data,
+                                };
+
+                                let inner_instruction = InnerInstruction {
+                                    instruction: compiled_instruction,
+                                    stack_height: ui_compiled.stack_height,
+                                };
+
+                                converted_instructions.push(inner_instruction);
                             }
                         }
                     }
-                }
-            }
-        }
 
-        let result = self.process_events(instruction_events, bot_wallet);
-
-        Ok(result)
-    }
-
-    fn process_events(
-        &self,
-        mut events: Vec<Box<dyn UnifiedEvent>>,
-        bot_wallet: Option<Pubkey>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        let mut dev_address = vec![];
-        let mut bonk_dev_address = None;
-        for event in &mut events {
-            if let Some(token_info) = event.as_any().downcast_ref::<PumpFunCreateTokenEvent>() {
-                dev_address.push(token_info.user);
-                if token_info.creator != Pubkey::default() && token_info.creator != token_info.user
-                {
-                    dev_address.push(token_info.creator);
-                }
-            } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpFunTradeEvent>()
-            {
-                if dev_address.contains(&trade_info.user)
-                    || dev_address.contains(&trade_info.creator)
-                {
-                    trade_info.is_dev_create_token_trade = true;
-                } else if Some(trade_info.user) == bot_wallet {
-                    trade_info.is_bot = true;
-                } else {
-                    trade_info.is_dev_create_token_trade = false;
-                }
-                if trade_info.metadata.swap_data.is_some() {
-                    trade_info.metadata.swap_data.as_mut().unwrap().from_amount =
-                        if trade_info.is_buy {
-                            trade_info.sol_amount
-                        } else {
-                            trade_info.token_amount
-                        };
-                    trade_info.metadata.swap_data.as_mut().unwrap().to_amount = if trade_info.is_buy
-                    {
-                        trade_info.token_amount
-                    } else {
-                        trade_info.sol_amount
+                    let inner_instructions = InnerInstructions {
+                        index: ui_inner.index,
+                        instructions: converted_instructions,
                     };
-                }
-            } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpSwapBuyEvent>() {
-                if trade_info.metadata.swap_data.is_some() {
-                    trade_info.metadata.swap_data.as_mut().unwrap().from_amount =
-                        trade_info.user_quote_amount_in;
-                    trade_info.metadata.swap_data.as_mut().unwrap().to_amount =
-                        trade_info.base_amount_out;
-                }
-            } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpSwapSellEvent>()
-            {
-                if trade_info.metadata.swap_data.is_some() {
-                    trade_info.metadata.swap_data.as_mut().unwrap().from_amount =
-                        trade_info.base_amount_in;
-                    trade_info.metadata.swap_data.as_mut().unwrap().to_amount =
-                        trade_info.user_quote_amount_out;
-                }
-            } else if let Some(pool_info) = event.as_any().downcast_ref::<BonkPoolCreateEvent>() {
-                bonk_dev_address = Some(pool_info.creator);
-            } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<BonkTradeEvent>() {
-                if Some(trade_info.payer) == bonk_dev_address {
-                    trade_info.is_dev_create_token_trade = true;
-                } else if Some(trade_info.payer) == bot_wallet {
-                    trade_info.is_bot = true;
-                } else {
-                    trade_info.is_dev_create_token_trade = false;
+
+                    inner_instructions_vec.push(inner_instructions);
                 }
             }
-            event.clear_id();
+        }
+        let inner_instructions: &[InnerInstructions] = &inner_instructions_vec;
+
+        let meta = transaction.transaction.meta;
+        let mut address_table_lookups: Vec<Pubkey> = vec![];
+        if let Some(meta) = meta {
+            if let solana_transaction_status::option_serializer::OptionSerializer::Some(
+                loaded_addresses,
+            ) = &meta.loaded_addresses
+            {
+                address_table_lookups
+                    .reserve(loaded_addresses.writable.len() + loaded_addresses.readonly.len());
+                address_table_lookups.extend(
+                    loaded_addresses
+                        .writable
+                        .iter()
+                        .filter_map(|s| s.parse::<Pubkey>().ok())
+                        .chain(
+                            loaded_addresses
+                                .readonly
+                                .iter()
+                                .filter_map(|s| s.parse::<Pubkey>().ok()),
+                        ),
+                );
+            }
+        }
+        let mut accounts = Vec::with_capacity(
+            versioned_tx.message.static_account_keys().len() + address_table_lookups.len(),
+        );
+        accounts.extend_from_slice(versioned_tx.message.static_account_keys());
+        accounts.extend(address_table_lookups);
+        // 使用 Arc 包装共享数据，避免不必要的克隆
+        let accounts_arc = Arc::new(accounts);
+        let inner_instructions_arc = Arc::new(inner_instructions);
+
+        let slot = transaction.slot;
+        let block_time = transaction.block_time.map(|t| Timestamp { seconds: t as i64, nanos: 0 });
+        let program_received_time_us = chrono::Utc::now().timestamp_micros();
+        let bot_wallet = None;
+        let transaction_index = None;
+        // 解析指令事件
+        self.parse_instruction_events_from_versioned_transaction(
+            &versioned_tx,
+            signature,
+            Some(slot),
+            block_time,
+            program_received_time_us,
+            &accounts_arc,
+            &inner_instructions_arc,
+            bot_wallet,
+            transaction_index,
+            callback.clone(),
+        )
+        .await?;
+
+        // 解析嵌套指令事件
+        for inner_instruction in inner_instructions_arc.iter() {
+            for (index, instruction) in inner_instruction.instructions.iter().enumerate() {
+                self.parse_instruction(
+                    &instruction.instruction,
+                    &accounts_arc,
+                    signature,
+                    Some(slot),
+                    block_time,
+                    program_received_time_us,
+                    inner_instruction.index as i64,
+                    Some(index as i64),
+                    bot_wallet,
+                    transaction_index,
+                    Some(&inner_instruction),
+                    callback.clone(),
+                )
+                .await?;
+            }
         }
 
-        events
+        Ok(())
     }
 
     async fn parse_inner_instruction(
@@ -511,9 +475,9 @@ pub trait EventParser: Send + Sync {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
-        bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
+        config: &GenericEventParseConfig,
+    ) -> anyhow::Result<Vec<Box<dyn UnifiedEvent>>> {
         let slot = slot.unwrap_or(0);
         let events = self.parse_events_from_inner_instruction(
             instruction,
@@ -523,8 +487,8 @@ pub trait EventParser: Send + Sync {
             program_received_time_us,
             outer_index,
             inner_index,
-            bot_wallet,
             transaction_index,
+            config,
         );
         Ok(events)
     }
@@ -542,9 +506,11 @@ pub trait EventParser: Send + Sync {
         inner_index: Option<i64>,
         bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Result<Vec<Box<dyn UnifiedEvent>>> {
+        inner_instructions: Option<&InnerInstructions>,
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
         let slot = slot.unwrap_or(0);
-        let events = self.parse_events_from_instruction(
+        self.parse_events_from_instruction(
             instruction,
             accounts,
             signature,
@@ -555,8 +521,9 @@ pub trait EventParser: Send + Sync {
             inner_index,
             bot_wallet,
             transaction_index,
-        );
-        Ok(events)
+            inner_instructions,
+            callback,
+        )
     }
 
     /// 检查是否应该处理此程序ID
@@ -596,7 +563,7 @@ pub type InstructionEventParser =
 /// 通用事件解析器基类
 pub struct GenericEventParser {
     pub program_ids: Vec<Pubkey>,
-    pub inner_instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
+    // pub inner_instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
     pub instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
 }
 
@@ -604,23 +571,16 @@ impl GenericEventParser {
     /// 创建新的通用事件解析器
     pub fn new(program_ids: Vec<Pubkey>, configs: Vec<GenericEventParseConfig>) -> Self {
         // 预分配容量，避免动态扩容
-        let mut inner_instruction_configs = HashMap::with_capacity(configs.len());
         let mut instruction_configs = HashMap::with_capacity(configs.len());
 
         for config in configs {
-            if config.inner_instruction_discriminator.len() > 0 {
-                inner_instruction_configs
-                    .entry(config.inner_instruction_discriminator.to_vec())
-                    .or_insert_with(Vec::new)
-                    .push(config.clone());
-            }
             instruction_configs
                 .entry(config.instruction_discriminator.to_vec())
                 .or_insert_with(Vec::new)
                 .push(config.clone());
         }
 
-        Self { program_ids, inner_instruction_configs, instruction_configs }
+        Self { program_ids, instruction_configs }
     }
 
     /// 通用的内联指令解析方法
@@ -701,12 +661,7 @@ impl GenericEventParser {
 
 #[async_trait::async_trait]
 impl EventParser for GenericEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        // 返回引用而非克隆，减少内存分配
-        self.inner_instruction_configs.clone()
-    }
     fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        // 返回引用而非克隆，减少内存分配
         self.instruction_configs.clone()
     }
     /// 从内联指令中解析事件数据
@@ -720,32 +675,26 @@ impl EventParser for GenericEventParser {
         program_received_time_us: i64,
         outer_index: i64,
         inner_index: Option<i64>,
-        bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
+        config: &GenericEventParseConfig,
     ) -> Vec<Box<dyn UnifiedEvent>> {
         if inner_instruction.data.len() < 16 {
             return Vec::new();
         }
         let data = &inner_instruction.data[16..];
         let mut events = Vec::new();
-        for (disc, configs) in &self.inner_instruction_configs {
-            if data == disc {
-                for config in configs {
-                    if let Some(event) = self.parse_inner_instruction_event(
-                        config,
-                        data,
-                        signature,
-                        slot,
-                        block_time,
-                        program_received_time_us,
-                        outer_index,
-                        inner_index,
-                        transaction_index,
-                    ) {
-                        events.push(event);
-                    }
-                }
-            }
+        if let Some(event) = self.parse_inner_instruction_event(
+            config,
+            data,
+            signature,
+            slot,
+            block_time,
+            program_received_time_us,
+            outer_index,
+            inner_index,
+            transaction_index,
+        ) {
+            events.push(event);
         }
         events
     }
@@ -764,12 +713,13 @@ impl EventParser for GenericEventParser {
         inner_index: Option<i64>,
         bot_wallet: Option<Pubkey>,
         transaction_index: Option<u64>,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
+        inner_instructions: Option<&InnerInstructions>,
+        callback: Arc<dyn for<'a> Fn(&'a Box<dyn UnifiedEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
         let program_id = accounts[instruction.program_id_index as usize];
         if !self.should_handle(&program_id) {
-            return Vec::new();
+            return Ok(());
         }
-        let mut events = Vec::new();
         for (disc, configs) in &self.instruction_configs {
             if instruction.data.len() < disc.len() {
                 continue;
@@ -781,14 +731,13 @@ impl EventParser for GenericEventParser {
                 if !validate_account_indices(&instruction.accounts, accounts.len()) {
                     continue;
                 }
-
                 let account_pubkeys: Vec<Pubkey> =
                     instruction.accounts.iter().map(|&idx| accounts[idx as usize]).collect();
                 for config in configs {
                     if config.program_id != program_id {
                         continue;
                     }
-                    if let Some(event) = self.parse_instruction_event(
+                    if let Some(mut event) = self.parse_instruction_event(
                         config,
                         data,
                         &account_pubkeys,
@@ -800,13 +749,53 @@ impl EventParser for GenericEventParser {
                         inner_index,
                         transaction_index,
                     ) {
-                        events.push(event);
+                        let mut inner_instruction_event: Option<Box<dyn UnifiedEvent>> = None;
+                        if inner_instructions.is_some() {
+                            // 解析对应的内部 log 执行
+                            for inner_instruction in inner_instructions.unwrap().instructions.iter()
+                            {
+                                let result = self.parse_events_from_inner_instruction(
+                                    &inner_instruction.instruction,
+                                    signature,
+                                    slot,
+                                    block_time,
+                                    program_received_time_us,
+                                    outer_index,
+                                    inner_index,
+                                    transaction_index,
+                                    config,
+                                );
+                                if result.len() > 0 {
+                                    inner_instruction_event = Some(result[0].clone());
+                                }
+                                // 解析swap数据
+                                let swap_data = parse_swap_data_from_next_instructions(
+                                    &*event,
+                                    inner_instructions.unwrap(),
+                                    inner_index.unwrap_or(-1_i64) as i8,
+                                    &accounts,
+                                );
+                                if let Some(swap_data) = swap_data {
+                                    event.set_swap_data(swap_data);
+                                }
+                            }
+                        }
+                        // 合并事件
+                        if let Some(inner_instruction_event) = inner_instruction_event {
+                            event.merge(&*inner_instruction_event);
+                        }
+                        // 设置处理时间
+                        event.set_program_handle_time_consuming_us(
+                            chrono::Utc::now().timestamp_micros() - program_received_time_us,
+                        );
+                        event = process_event(event, bot_wallet);
+                        callback(&event);
+                        break;
                     }
                 }
             }
         }
-
-        events
+        Ok(())
     }
 
     fn should_handle(&self, program_id: &Pubkey) -> bool {
@@ -816,4 +805,55 @@ impl EventParser for GenericEventParser {
     fn supported_program_ids(&self) -> Vec<Pubkey> {
         self.program_ids.clone()
     }
+}
+
+fn process_event(
+    mut event: Box<dyn UnifiedEvent>,
+    bot_wallet: Option<Pubkey>,
+) -> Box<dyn UnifiedEvent> {
+    update_slot(event.slot());
+    if let Some(token_info) = event.as_any().downcast_ref::<PumpFunCreateTokenEvent>() {
+        add_dev_address(token_info.user);
+        if token_info.creator != Pubkey::default() && token_info.creator != token_info.user {
+            add_dev_address(token_info.creator);
+        }
+    } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpFunTradeEvent>() {
+        if is_dev_address(&trade_info.user) || is_dev_address(&trade_info.creator) {
+            trade_info.is_dev_create_token_trade = true;
+        } else if Some(trade_info.user) == bot_wallet {
+            trade_info.is_bot = true;
+        } else {
+            trade_info.is_dev_create_token_trade = false;
+        }
+        if trade_info.metadata.swap_data.is_some() {
+            trade_info.metadata.swap_data.as_mut().unwrap().from_amount =
+                if trade_info.is_buy { trade_info.sol_amount } else { trade_info.token_amount };
+            trade_info.metadata.swap_data.as_mut().unwrap().to_amount =
+                if trade_info.is_buy { trade_info.token_amount } else { trade_info.sol_amount };
+        }
+    } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpSwapBuyEvent>() {
+        if trade_info.metadata.swap_data.is_some() {
+            trade_info.metadata.swap_data.as_mut().unwrap().from_amount =
+                trade_info.user_quote_amount_in;
+            trade_info.metadata.swap_data.as_mut().unwrap().to_amount = trade_info.base_amount_out;
+        }
+    } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpSwapSellEvent>() {
+        if trade_info.metadata.swap_data.is_some() {
+            trade_info.metadata.swap_data.as_mut().unwrap().from_amount = trade_info.base_amount_in;
+            trade_info.metadata.swap_data.as_mut().unwrap().to_amount =
+                trade_info.user_quote_amount_out;
+        }
+    } else if let Some(pool_info) = event.as_any().downcast_ref::<BonkPoolCreateEvent>() {
+        add_bonk_dev_address(pool_info.creator);
+    } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<BonkTradeEvent>() {
+        if is_bonk_dev_address(&trade_info.payer) {
+            trade_info.is_dev_create_token_trade = true;
+        } else if Some(trade_info.payer) == bot_wallet {
+            trade_info.is_bot = true;
+        } else {
+            trade_info.is_dev_create_token_trade = false;
+        }
+    }
+    event.clear_id();
+    event
 }

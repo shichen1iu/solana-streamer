@@ -42,7 +42,6 @@ impl ShredStreamGrpc {
             protocols,
             event_type_filter,
             self.config.backpressure.clone(),
-            self.config.batch.clone(),
             Some(Arc::new(callback)),
         );
 
@@ -58,18 +57,24 @@ impl ShredStreamGrpc {
                         if let Ok(entries) = bincode::deserialize::<Vec<Entry>>(&msg.entries) {
                             for entry in entries {
                                 for transaction in entry.transactions {
-                                    let transaction_with_slot =
-                                        TransactionWithSlot::new(transaction.clone(), msg.slot);
-                                    if let Err(e) = event_processor_clone
-                                        .process_shred_transaction_immediate(
-                                            transaction_with_slot,
-                                            bot_wallet,
-                                        )
-                                        .await
-                                    {
-                                        error!("Error handling message: {e:?}");
-                                        break;
-                                    }
+                                    let transaction_with_slot = TransactionWithSlot::new(
+                                        transaction.clone(),
+                                        msg.slot,
+                                        chrono::Utc::now().timestamp_micros(),
+                                    );
+                                    // 异步执行，不阻塞主流，使用带背压控制的方法
+                                    let processor_clone = event_processor_clone.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = processor_clone
+                                            .process_shred_transaction_with_metrics(
+                                                transaction_with_slot,
+                                                bot_wallet,
+                                            )
+                                            .await
+                                        {
+                                            error!("Error handling message: {e:?}");
+                                        }
+                                    });
                                 }
                             }
                         }

@@ -15,15 +15,6 @@ macro_rules! impl_event_parser_delegate {
     ($parser_type:ty) => {
         #[async_trait::async_trait]
         impl $crate::streaming::event_parser::core::traits::EventParser for $parser_type {
-            fn inner_instruction_configs(
-                &self,
-            ) -> std::collections::HashMap<
-                Vec<u8>,
-                Vec<$crate::streaming::event_parser::core::traits::GenericEventParseConfig>,
-            > {
-                self.inner.inner_instruction_configs()
-            }
-
             fn instruction_configs(
                 &self,
             ) -> std::collections::HashMap<
@@ -42,8 +33,8 @@ macro_rules! impl_event_parser_delegate {
                 program_received_time_us: i64,
                 outer_index: i64,
                 inner_index: Option<i64>,
-                bot_wallet: Option<solana_sdk::pubkey::Pubkey>,
                 transaction_index: Option<u64>,
+                config: &GenericEventParseConfig,
             ) -> Vec<Box<dyn $crate::streaming::event_parser::core::traits::UnifiedEvent>> {
                 self.inner.parse_events_from_inner_instruction(
                     inner_instruction,
@@ -53,8 +44,8 @@ macro_rules! impl_event_parser_delegate {
                     program_received_time_us,
                     outer_index,
                     inner_index,
-                    bot_wallet,
                     transaction_index,
+                    config,
                 )
             }
 
@@ -70,7 +61,13 @@ macro_rules! impl_event_parser_delegate {
                 inner_index: Option<i64>,
                 bot_wallet: Option<solana_sdk::pubkey::Pubkey>,
                 transaction_index: Option<u64>,
-            ) -> Vec<Box<dyn $crate::streaming::event_parser::core::traits::UnifiedEvent>> {
+                inner_instructions: Option<&solana_transaction_status::InnerInstructions>,
+                callback: std::sync::Arc<
+                    dyn for<'a> Fn(&'a Box<dyn $crate::streaming::event_parser::core::traits::UnifiedEvent>)
+                        + Send
+                        + Sync,
+                >,
+            ) -> anyhow::Result<()> {
                 self.inner.parse_events_from_instruction(
                     instruction,
                     accounts,
@@ -82,6 +79,8 @@ macro_rules! impl_event_parser_delegate {
                     inner_index,
                     bot_wallet,
                     transaction_index,
+                    inner_instructions,
+                    callback,
                 )
             }
 

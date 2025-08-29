@@ -1,15 +1,18 @@
 use crate::{
     common::AnyResult,
     streaming::{
-        grpc::{EventPretty, StreamHandler},
+        grpc::{EventPretty, TransactionPretty},
         yellowstone_grpc::YellowstoneGrpc,
     },
 };
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use log::error;
 use solana_program::pubkey;
 use solana_sdk::{pubkey::Pubkey, transaction::VersionedTransaction};
 use solana_transaction_status::TransactionWithStatusMeta;
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestPing,
+};
 
 const SYSTEM_PROGRAM_ID: Pubkey = pubkey!("11111111111111111111111111111111");
 
@@ -34,7 +37,7 @@ impl YellowstoneGrpc {
         account_exclude: Option<Vec<String>>,
     ) -> AnyResult<()>
     where
-        F: Fn(SystemEvent) + Send + Sync + 'static,
+        F: Fn(SystemEvent) + Send + Sync + Clone + 'static,
     {
         let addrs = vec![SYSTEM_PROGRAM_ID.to_string()];
         let account_include = account_include.unwrap_or_default();
@@ -56,16 +59,36 @@ impl YellowstoneGrpc {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
-                        if let Ok(event_pretty) =
-                            StreamHandler::handle_stream_system_message(msg, &mut subscribe_tx)
-                                .await
-                        {
-                            if let Some(event_pretty) = event_pretty {
-                                if let Err(e) =
-                                    Self::process_system_transaction(event_pretty, &*callback).await
-                                {
-                                    error!("Error processing transaction: {e:?}");
-                                }
+                        let created_at = msg.created_at;
+                        match msg.update_oneof {
+                            Some(UpdateOneof::Transaction(sut)) => {
+                                let transaction_pretty = TransactionPretty::from((sut, created_at));
+                                let event_pretty = EventPretty::Transaction(transaction_pretty);
+                                let callback_clone = callback.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = Self::process_system_transaction(
+                                        event_pretty,
+                                        &*callback_clone,
+                                    )
+                                    .await
+                                    {
+                                        error!("Error processing transaction: {e:?}");
+                                    }
+                                });
+                            }
+                            Some(UpdateOneof::Ping(_)) => {
+                                let _ = subscribe_tx
+                                    .send(SubscribeRequest {
+                                        ping: Some(SubscribeRequestPing { id: 1 }),
+                                        ..Default::default()
+                                    })
+                                    .await;
+                            }
+                            Some(UpdateOneof::Pong(_)) => {
+                                // Pong response, no action needed
+                            }
+                            _ => {
+                                // Other message types, ignore for system subscription
                             }
                         }
                     }

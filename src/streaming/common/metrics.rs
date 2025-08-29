@@ -108,15 +108,21 @@ impl AtomicEventMetrics {
 struct AtomicProcessingTimeStats {
     min_time_bits: AtomicU64,
     max_time_bits: AtomicU64,
-    total_time_us: AtomicU64, // 存储微秒的整数部分
+    max_time_timestamp_nanos: AtomicU64, // 最大值更新时间戳（纳秒）
+    total_time_us: AtomicU64,            // 存储微秒的整数部分
     total_events: AtomicU64,
 }
 
 impl AtomicProcessingTimeStats {
     fn new() -> Self {
+        let now_nanos =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                as u64;
+
         Self {
             min_time_bits: AtomicU64::new(f64::INFINITY.to_bits()),
             max_time_bits: AtomicU64::new(0),
+            max_time_timestamp_nanos: AtomicU64::new(now_nanos),
             total_time_us: AtomicU64::new(0),
             total_events: AtomicU64::new(0),
         }
@@ -126,6 +132,9 @@ impl AtomicProcessingTimeStats {
     #[inline]
     fn update(&self, time_us: f64, event_count: u64) {
         let time_bits = time_us.to_bits();
+        let now_nanos =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                as u64;
 
         // 更新最小值（使用 compare_exchange_weak 循环）
         let mut current_min = self.min_time_bits.load(Ordering::Relaxed);
@@ -141,8 +150,20 @@ impl AtomicProcessingTimeStats {
             }
         }
 
-        // 更新最大值
+        // 更新最大值，检查时间差并在超过10秒时清零
         let mut current_max = self.max_time_bits.load(Ordering::Relaxed);
+        let max_timestamp = self.max_time_timestamp_nanos.load(Ordering::Relaxed);
+
+        // 检查最大值的时间戳是否超过10秒（10_000_000_000纳秒）
+        let time_diff_nanos = now_nanos.saturating_sub(max_timestamp);
+        if time_diff_nanos > 10_000_000_000 {
+            // 超过10秒，清零最大值
+            self.max_time_bits.store(0, Ordering::Relaxed);
+            self.max_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
+            current_max = 0;
+        }
+
+        // 如果当前时间大于最大值，更新最大值和时间戳
         while time_bits > current_max {
             match self.max_time_bits.compare_exchange_weak(
                 current_max,
@@ -150,7 +171,11 @@ impl AtomicProcessingTimeStats {
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => break,
+                Ok(_) => {
+                    // 成功更新最大值，同时更新时间戳
+                    self.max_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
+                    break;
+                }
                 Err(x) => current_max = x,
             }
         }
@@ -198,6 +223,18 @@ pub struct EventMetricsSnapshot {
     pub events_per_second: f64,
 }
 
+/// 背压指标快照
+#[derive(Debug, Clone)]
+pub struct BackpressureMetricsSnapshot {
+    pub total_duration_us: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub min_permits: u64,
+    pub max_permits: u64,
+    pub avg_duration_us: f64,
+    pub success_rate: f64,
+}
+
 /// 兼容性结构 - 完整的性能指标
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
@@ -206,6 +243,8 @@ pub struct PerformanceMetrics {
     pub account_metrics: EventMetricsSnapshot,
     pub block_meta_metrics: EventMetricsSnapshot,
     pub processing_stats: ProcessingTimeStats,
+    pub backpressure_metrics: BackpressureMetricsSnapshot,
+    pub dropped_events_count: u64,
 }
 
 impl PerformanceMetrics {
@@ -214,6 +253,15 @@ impl PerformanceMetrics {
         let default_metrics =
             EventMetricsSnapshot { process_count: 0, events_processed: 0, events_per_second: 0.0 };
         let default_stats = ProcessingTimeStats { min_us: 0.0, max_us: 0.0, avg_us: 0.0 };
+        let default_backpressure = BackpressureMetricsSnapshot {
+            total_duration_us: 0,
+            success_count: 0,
+            failure_count: 0,
+            min_permits: 0,
+            max_permits: 0,
+            avg_duration_us: 0.0,
+            success_rate: 0.0,
+        };
 
         Self {
             uptime: std::time::Duration::ZERO,
@@ -221,6 +269,8 @@ impl PerformanceMetrics {
             account_metrics: default_metrics.clone(),
             block_meta_metrics: default_metrics,
             processing_stats: default_stats,
+            backpressure_metrics: default_backpressure,
+            dropped_events_count: 0,
         }
     }
 }
@@ -231,6 +281,14 @@ pub struct HighPerformanceMetrics {
     start_nanos: u64,
     event_metrics: [AtomicEventMetrics; 3],
     processing_stats: AtomicProcessingTimeStats,
+    // 背压相关指标
+    backpressure_total_duration_us: AtomicU64,
+    backpressure_success_count: AtomicU64,
+    backpressure_failure_count: AtomicU64,
+    backpressure_min_permits: AtomicU64,
+    backpressure_max_permits: AtomicU64,
+    // 丢弃事件指标
+    dropped_events_count: AtomicU64,
 }
 
 impl HighPerformanceMetrics {
@@ -247,6 +305,14 @@ impl HighPerformanceMetrics {
                 AtomicEventMetrics::new(now_nanos),
             ],
             processing_stats: AtomicProcessingTimeStats::new(),
+            // 初始化背压相关指标
+            backpressure_total_duration_us: AtomicU64::new(0),
+            backpressure_success_count: AtomicU64::new(0),
+            backpressure_failure_count: AtomicU64::new(0),
+            backpressure_min_permits: AtomicU64::new(u64::MAX), // 初始化为最大值，便于后续比较
+            backpressure_max_permits: AtomicU64::new(0),
+            // 初始化丢弃事件指标
+            dropped_events_count: AtomicU64::new(0),
         }
     }
 
@@ -273,6 +339,38 @@ impl HighPerformanceMetrics {
     #[inline]
     pub fn get_processing_stats(&self) -> ProcessingTimeStats {
         self.processing_stats.get_stats()
+    }
+
+    /// 获取背压指标快照
+    #[inline]
+    pub fn get_backpressure_metrics(&self) -> BackpressureMetricsSnapshot {
+        let total_duration_us = self.backpressure_total_duration_us.load(Ordering::Relaxed);
+        let success_count = self.backpressure_success_count.load(Ordering::Relaxed);
+        let failure_count = self.backpressure_failure_count.load(Ordering::Relaxed);
+        let min_permits = self.backpressure_min_permits.load(Ordering::Relaxed);
+        let max_permits = self.backpressure_max_permits.load(Ordering::Relaxed);
+
+        let total_count = success_count + failure_count;
+        let avg_duration_us =
+            if total_count > 0 { total_duration_us as f64 / total_count as f64 } else { 0.0 };
+        let success_rate =
+            if total_count > 0 { success_count as f64 / total_count as f64 } else { 0.0 };
+
+        BackpressureMetricsSnapshot {
+            total_duration_us,
+            success_count,
+            failure_count,
+            min_permits: if min_permits == u64::MAX { 0 } else { min_permits },
+            max_permits,
+            avg_duration_us,
+            success_rate,
+        }
+    }
+
+    /// 获取丢弃事件计数
+    #[inline]
+    pub fn get_dropped_events_count(&self) -> u64 {
+        self.dropped_events_count.load(Ordering::Relaxed)
     }
 
     /// 计算实时每秒事件数（非阻塞）
@@ -443,10 +541,42 @@ impl MetricsManager {
         self.metrics.get_processing_stats()
     }
 
+    /// 获取背压指标
+    pub fn get_backpressure_metrics(&self) -> BackpressureMetricsSnapshot {
+        self.metrics.get_backpressure_metrics()
+    }
+
+    /// 获取丢弃事件计数
+    pub fn get_dropped_events_count(&self) -> u64 {
+        self.metrics.get_dropped_events_count()
+    }
+
     /// 打印性能指标（非阻塞）
     pub fn print_metrics(&self) {
         println!("\n📊 {} Performance Metrics", self.stream_name);
         println!("   Run Time: {:?}", self.get_uptime());
+
+        // 打印背压指标表格
+        let backpressure = self.get_backpressure_metrics();
+        if backpressure.success_count > 0 || backpressure.failure_count > 0 {
+            println!("\n🚦 Backpressure Metrics");
+            println!("┌──────────────────────┬─────────────┐");
+            println!("│ Metric               │ Value       │");
+            println!("├──────────────────────┼─────────────┤");
+            println!("│ Success Count        │ {:11} │", backpressure.success_count);
+            println!("│ Failure Count        │ {:11} │", backpressure.failure_count);
+            println!("│ Success Rate         │ {:11.2} │", backpressure.success_rate * 100.0);
+            println!("│ Avg Duration (ms)    │ {:11.2} │", backpressure.avg_duration_us / 1000.0);
+            println!("│ Min Permits          │ {:11} │", backpressure.min_permits);
+            println!("│ Max Permits          │ {:11} │", backpressure.max_permits);
+            println!("└──────────────────────┴─────────────┘");
+        }
+
+        // 打印丢弃事件指标
+        let dropped_count = self.get_dropped_events_count();
+        if dropped_count > 0 {
+            println!("\n⚠️  Dropped Events: {}", dropped_count);
+        }
 
         // 打印事件指标表格
         println!("┌─────────────┬──────────────┬──────────────────┬─────────────────┐");
@@ -469,13 +599,14 @@ impl MetricsManager {
         // 打印处理时间统计表格
         let stats = self.get_processing_stats();
         println!("\n⏱️  Processing Time Statistics");
-        println!("┌─────────────────────┬─────────────┐");
-        println!("│ Metric              │ Value (us)  │");
-        println!("├─────────────────────┼─────────────┤");
-        println!("│ Average             │ {:9.2}   │", stats.avg_us);
-        println!("│ Minimum             │ {:9.2}   │", stats.min_us);
-        println!("│ Maximum             │ {:9.2}   │", stats.max_us);
-        println!("└─────────────────────┴─────────────┘");
+        println!("┌───────────────────────┬─────────────┐");
+        println!("│ Metric                │ Value (us)  │");
+        println!("├───────────────────────┼─────────────┤");
+        println!("│ Average               │ {:9.2}   │", stats.avg_us);
+        println!("│ Minimum               │ {:9.2}   │", stats.min_us);
+        println!("│ Maximum within 10s    │ {:9.2}   │", stats.max_us);
+        println!("└───────────────────────┴─────────────┘");
+
         println!();
     }
 
@@ -517,6 +648,8 @@ impl MetricsManager {
             account_metrics: self.get_event_metrics(EventType::Account),
             block_meta_metrics: self.get_event_metrics(EventType::BlockMeta),
             processing_stats: self.get_processing_stats(),
+            backpressure_metrics: self.metrics.get_backpressure_metrics(),
+            dropped_events_count: self.metrics.get_dropped_events_count(),
         }
     }
 
@@ -549,6 +682,110 @@ impl MetricsManager {
     ) {
         self.record_events(event_type, events_processed, processing_time_us);
         self.log_slow_processing(processing_time_us, events_processed as usize, signature);
+    }
+
+    /// 记录背压相关的metrics
+    #[inline]
+    pub fn record_backpressure_metrics(
+        &self,
+        backpressure_duration: std::time::Duration,
+        success: bool,
+        available_permits: usize,
+    ) {
+        if !self.enable_metrics {
+            return;
+        }
+
+        let duration_us = backpressure_duration.as_micros() as u64;
+        let permits = available_permits as u64;
+
+        // 记录总持续时间
+        self.metrics.backpressure_total_duration_us.fetch_add(duration_us, Ordering::Relaxed);
+
+        // 记录成功/失败计数
+        if success {
+            self.metrics.backpressure_success_count.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.metrics.backpressure_failure_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // 更新最小许可数（使用 compare_exchange_weak 循环）
+        let mut current_min = self.metrics.backpressure_min_permits.load(Ordering::Relaxed);
+        while permits < current_min {
+            match self.metrics.backpressure_min_permits.compare_exchange_weak(
+                current_min,
+                permits,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(x) => current_min = x,
+            }
+        }
+
+        // 更新最大许可数
+        let mut current_max = self.metrics.backpressure_max_permits.load(Ordering::Relaxed);
+        while permits > current_max {
+            match self.metrics.backpressure_max_permits.compare_exchange_weak(
+                current_max,
+                permits,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(x) => current_max = x,
+            }
+        }
+
+        // 记录慢背压操作的日志
+        if duration_us > 10_000 {
+            // 超过10ms的背压认为是慢操作
+            log::warn!(
+                "{} slow backpressure: {:.2}ms, success: {}, available_permits: {}",
+                self.stream_name,
+                duration_us as f64 / 1000.0,
+                success,
+                available_permits
+            );
+        }
+    }
+
+    /// 增加丢弃事件计数
+    #[inline]
+    pub fn increment_dropped_events(&self) {
+        if !self.enable_metrics {
+            return;
+        }
+
+        // 原子地增加丢弃事件计数
+        let new_count = self.metrics.dropped_events_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+        // 每丢弃1000个事件记录一次警告日志
+        if new_count % 1000 == 0 {
+            log::warn!("{} dropped events count reached: {}", self.stream_name, new_count);
+        }
+    }
+
+    /// 批量增加丢弃事件计数
+    #[inline]
+    pub fn increment_dropped_events_by(&self, count: u64) {
+        if !self.enable_metrics || count == 0 {
+            return;
+        }
+
+        // 原子地增加丢弃事件计数
+        let new_count = self.metrics.dropped_events_count.fetch_add(count, Ordering::Relaxed) + count;
+
+        // 记录批量丢弃事件的日志
+        if count > 1 {
+            log::warn!("{} dropped batch of {} events, total dropped: {}", 
+                self.stream_name, count, new_count);
+        }
+
+        // 每丢弃1000个事件记录一次警告日志
+        if new_count % 1000 == 0 || (new_count / 1000) != ((new_count - count) / 1000) {
+            log::warn!("{} dropped events count reached: {}", self.stream_name, new_count);
+        }
     }
 }
 

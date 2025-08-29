@@ -24,7 +24,7 @@
 11. **性能监控**: 内置性能指标监控，包括事件处理速度等
 12. **内存优化**: 对象池和缓存机制减少内存分配
 13. **灵活配置系统**: 支持自定义批处理大小、背压策略、通道大小等参数
-14. **预设配置**: 提供高性能、低延迟、有序处理等预设配置
+14. **预设配置**: 提供高吞吐量、低延迟、异步处理等预设配置，针对不同使用场景优化
 15. **背压处理**: 支持阻塞、丢弃、重试、有序等多种背压策略
 16. **运行时配置更新**: 支持在运行时动态更新配置参数
 17. **全函数性能监控**: 所有subscribe_events函数都支持性能监控，自动收集和报告性能指标
@@ -54,6 +54,91 @@ solana-streamer-sdk = { path = "./solana-streamer", version = "0.3.10" }
 # 添加到您的 Cargo.toml
 solana-streamer-sdk = "0.3.10"
 ```
+
+## 配置系统
+
+### 预设配置
+
+库提供了三种预设配置，针对不同的使用场景进行了优化：
+
+#### 1. 高吞吐量配置 (`high_throughput()`)
+
+专为高并发场景优化，优先考虑吞吐量而非延迟：
+
+```rust
+let config = StreamClientConfig::high_throughput();
+// 或者使用便捷方法
+let grpc = YellowstoneGrpc::new_high_throughput(endpoint, token)?;
+let shred = ShredStreamGrpc::new_high_throughput(endpoint).await?;
+```
+
+**特性：**
+- **背压策略**: Drop（丢弃策略）- 在高负载时丢弃消息以避免阻塞
+- **缓冲区大小**: 5,000 个许可证，处理突发流量
+- **适用场景**: 需要处理大量数据且可以容忍在峰值负载时偶尔丢失消息的场景
+
+#### 2. 低延迟配置 (`low_latency()`)
+
+专为实时场景优化，优先考虑延迟而非吞吐量：
+
+```rust
+let config = StreamClientConfig::low_latency();
+// 或者使用便捷方法
+let grpc = YellowstoneGrpc::new_low_latency(endpoint, token)?;
+let shred = ShredStreamGrpc::new_low_latency(endpoint).await?;
+```
+
+**特性：**
+- **背压策略**: Block（阻塞策略）- 确保不丢失任何数据
+- **缓冲区大小**: 1 个许可证，最小化内存使用
+- **立即处理**: 不进行缓冲，立即处理事件
+- **适用场景**: 每毫秒都很重要且不能丢失任何事件的场景，如交易应用或实时监控
+
+#### 3. 异步处理配置 (`async_processing()`)
+
+在吞吐量和可靠性之间取得平衡：
+
+```rust
+let config = StreamClientConfig::async_processing();
+// 或者使用便捷方法
+let grpc = YellowstoneGrpc::new_async_processing(endpoint, token)?;
+let shred = ShredStreamGrpc::new_async_processing(endpoint).await?;
+```
+
+**特性：**
+- **背压策略**: Async（异步策略）- 非阻塞操作
+- **缓冲区大小**: 5,000 个许可证，保持稳定流量
+- **Fire-and-forget**: 异步处理语义
+- **适用场景**: 需要持续高吞吐量且可接受最终一致性的场景，如数据摄取管道或事件流应用
+
+### 自定义配置
+
+您也可以创建自定义配置：
+
+```rust
+let config = StreamClientConfig {
+    connection: ConnectionConfig {
+        connect_timeout: 30,
+        request_timeout: 120,
+        max_decoding_message_size: 20 * 1024 * 1024, // 20MB
+    },
+    backpressure: BackpressureConfig {
+        permits: 2000,
+        strategy: BackpressureStrategy::Block,
+    },
+    enable_metrics: true,
+};
+```
+
+### 配置选择指南
+
+| 场景 | 推荐配置 | 原因 |
+|------|----------|------|
+| 交易机器人 | `low_latency()` | 需要最快响应时间，不能丢失交易信号 |
+| 数据分析 | `high_throughput()` | 需要处理大量历史数据，可容忍部分数据丢失 |
+| 事件流处理 | `async_processing()` | 平衡性能和可靠性，适合持续处理 |
+| 实时监控 | `low_latency()` | 需要立即响应异常情况 |
+| 批量数据摄取 | `high_throughput()` | 优先考虑整体吞吐量 |
 
 ## 使用示例
 

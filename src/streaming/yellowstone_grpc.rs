@@ -1,9 +1,11 @@
-use futures::StreamExt;
+use chrono::Local;
+use futures::{SinkExt, StreamExt};
 use log::error;
 use solana_sdk::pubkey::Pubkey;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
-use yellowstone_grpc_proto::geyser::CommitmentLevel;
+use yellowstone_grpc_proto::geyser::subscribe_update::UpdateOneof;
+use yellowstone_grpc_proto::geyser::{CommitmentLevel, SubscribeRequest, SubscribeRequestPing};
 
 use crate::common::AnyResult;
 use crate::streaming::common::{
@@ -11,7 +13,9 @@ use crate::streaming::common::{
 };
 use crate::streaming::event_parser::common::filter::EventTypeFilter;
 use crate::streaming::event_parser::{Protocol, UnifiedEvent};
-use crate::streaming::grpc::{StreamHandler, SubscriptionManager};
+use crate::streaming::grpc::{
+    AccountPretty, BlockMetaPretty, EventPretty, SubscriptionManager, TransactionPretty,
+};
 
 /// 交易过滤器
 pub struct TransactionFilter {
@@ -73,20 +77,31 @@ impl YellowstoneGrpc {
         })
     }
 
-    /// 创建高性能客户端
-    pub fn new_high_performance(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
-        Self::new_with_config(endpoint, x_token, StreamClientConfig::high_performance())
+    /// Creates a new YellowstoneGrpcClient with high-throughput configuration.
+    ///
+    /// This is a convenience method that creates a client optimized for high-concurrency scenarios
+    /// where throughput is prioritized over latency. See `StreamClientConfig::high_throughput()`
+    /// for detailed configuration information.
+    pub fn new_high_throughput(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, x_token, StreamClientConfig::high_throughput())
     }
 
-    /// 创建低延迟客户端
+    /// Creates a new YellowstoneGrpcClient with low-latency configuration.
+    ///
+    /// This is a convenience method that creates a client optimized for real-time scenarios
+    /// where latency is prioritized over throughput. See `StreamClientConfig::low_latency()`
+    /// for detailed configuration information.
     pub fn new_low_latency(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
         Self::new_with_config(endpoint, x_token, StreamClientConfig::low_latency())
     }
 
-    /// 创建即时处理客户端
-    pub fn new_immediate(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
-        let mut config = StreamClientConfig::low_latency();
-        config.enable_metrics = false;
+    /// Creates a new YellowstoneGrpcClient with asynchronous processing configuration.
+    ///
+    /// This is a convenience method that creates a client optimized for high-volume scenarios
+    /// with balanced throughput and reliability. See `StreamClientConfig::async_processing()`
+    /// for detailed configuration information.
+    pub fn new_async_processing(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
+        let config = StreamClientConfig::async_processing();
         Self::new_with_config(endpoint, x_token, config)
     }
 
@@ -171,10 +186,13 @@ impl YellowstoneGrpc {
         );
 
         // 订阅事件
-        let (mut subscribe_tx, mut stream) = self
+        let (subscribe_tx, mut stream) = self
             .subscription_manager
             .subscribe_with_request(transactions, accounts, commitment, event_type_filter.clone())
             .await?;
+
+        // 用 Arc<Mutex<>> 包装 subscribe_tx 以支持多线程共享
+        let subscribe_tx = Arc::new(Mutex::new(subscribe_tx));
 
         // 启动流处理任务
         let mut event_processor = self.event_processor.clone();
@@ -182,24 +200,84 @@ impl YellowstoneGrpc {
             protocols,
             event_type_filter,
             self.config.backpressure.clone(),
-            self.config.batch.clone(),
             Some(Arc::new(callback)),
         );
+        let event_processor = Arc::new(event_processor);
         let stream_handle = tokio::spawn(async move {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(msg) => {
-                        if let Err(e) = StreamHandler::handle_stream_message(
-                            msg,
-                            &mut subscribe_tx,
-                            event_processor.clone(),
-                            bot_wallet,
-                        )
-                        .await
-                        {
-                            error!("Error handling message: {e:?}");
-                            break;
-                        }
+                        // 不阻塞地处理消息，使用 tokio::spawn 实现并发
+                        let event_processor_ref = Arc::clone(&event_processor);
+                        let subscribe_tx_ref = Arc::clone(&subscribe_tx);
+                        tokio::spawn(async move {
+                            let created_at = msg.created_at;
+                            match msg.update_oneof {
+                                Some(UpdateOneof::Account(account)) => {
+                                    let account_pretty = AccountPretty::from(account);
+                                    log::debug!("Received account: {:?}", account_pretty);
+                                    if let Err(e) = event_processor_ref
+                                        .process_grpc_event_transaction_with_metrics(
+                                            EventPretty::Account(account_pretty),
+                                            bot_wallet,
+                                        )
+                                        .await
+                                    {
+                                        error!("Error processing account event: {e:?}");
+                                    }
+                                }
+                                Some(UpdateOneof::BlockMeta(sut)) => {
+                                    let block_meta_pretty =
+                                        BlockMetaPretty::from((sut, created_at));
+                                    log::debug!("Received block meta: {:?}", block_meta_pretty);
+                                    if let Err(e) = event_processor_ref
+                                        .process_grpc_event_transaction_with_metrics(
+                                            EventPretty::BlockMeta(block_meta_pretty),
+                                            bot_wallet,
+                                        )
+                                        .await
+                                    {
+                                        error!("Error processing block meta event: {e:?}");
+                                    }
+                                }
+                                Some(UpdateOneof::Transaction(sut)) => {
+                                    let transaction_pretty =
+                                        TransactionPretty::from((sut, created_at));
+                                    log::debug!(
+                                        "Received transaction: {} at slot {}",
+                                        transaction_pretty.signature,
+                                        transaction_pretty.slot
+                                    );
+                                    if let Err(e) = event_processor_ref
+                                        .process_grpc_event_transaction_with_metrics(
+                                            EventPretty::Transaction(transaction_pretty),
+                                            bot_wallet,
+                                        )
+                                        .await
+                                    {
+                                        error!("Error processing transaction event: {e:?}");
+                                    }
+                                }
+                                Some(UpdateOneof::Ping(_)) => {
+                                    // 只在需要时获取锁，并立即释放
+                                    if let Ok(mut tx_guard) = subscribe_tx_ref.try_lock() {
+                                        let _ = tx_guard
+                                            .send(SubscribeRequest {
+                                                ping: Some(SubscribeRequestPing { id: 1 }),
+                                                ..Default::default()
+                                            })
+                                            .await;
+                                    }
+                                    log::debug!("service is ping: {}", Local::now());
+                                }
+                                Some(UpdateOneof::Pong(_)) => {
+                                    log::debug!("service is pong: {}", Local::now());
+                                }
+                                _ => {
+                                    log::debug!("Received other message type");
+                                }
+                            }
+                        });
                     }
                     Err(error) => {
                         error!("Stream error: {error:?}");

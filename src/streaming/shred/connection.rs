@@ -41,14 +41,31 @@ impl ShredStreamGrpc {
         })
     }
 
-    /// 创建高性能客户端（适合高并发场景）
-    pub async fn new_high_performance(endpoint: String) -> AnyResult<Self> {
-        Self::new_with_config(endpoint, StreamClientConfig::high_performance()).await
+    /// Creates a new ShredStreamClient with high-throughput configuration.
+    ///
+    /// This is a convenience method that creates a client optimized for high-concurrency scenarios
+    /// where throughput is prioritized over latency. See `StreamClientConfig::high_throughput()`
+    /// for detailed configuration information.
+    pub async fn new_high_throughput(endpoint: String) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, StreamClientConfig::high_throughput()).await
     }
 
-    /// 创建低延迟客户端（适合实时场景）
+    /// Creates a new ShredStreamClient with low-latency configuration.
+    ///
+    /// This is a convenience method that creates a client optimized for real-time scenarios
+    /// where latency is prioritized over throughput. See `StreamClientConfig::low_latency()`
+    /// for detailed configuration information.
     pub async fn new_low_latency(endpoint: String) -> AnyResult<Self> {
         Self::new_with_config(endpoint, StreamClientConfig::low_latency()).await
+    }
+
+    /// Creates a new ShredStreamClient with asynchronous processing configuration.
+    ///
+    /// This is a convenience method that creates a client optimized for high-volume scenarios
+    /// with balanced throughput and reliability. See `StreamClientConfig::async_processing()`
+    /// for detailed configuration information.
+    pub async fn new_async_processing(endpoint: String) -> AnyResult<Self> {
+        Self::new_with_config(endpoint, StreamClientConfig::async_processing()).await
     }
 
     /// 获取当前配置

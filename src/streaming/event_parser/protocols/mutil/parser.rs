@@ -18,24 +18,6 @@ impl MutilEventParser {
         for protocol in protocols {
             let parse = EventParserFactory::create_parser(protocol);
 
-            // Merge inner_instruction_configs, append configurations to existing Vec
-            for (key, configs) in parse.inner_instruction_configs() {
-                let filtered_configs: Vec<GenericEventParseConfig> = configs
-                    .into_iter()
-                    .filter(|config| {
-                        event_type_filter
-                            .as_ref()
-                            .map(|filter| filter.include.contains(&config.event_type))
-                            .unwrap_or(true)
-                    })
-                    .collect();
-                inner
-                    .inner_instruction_configs
-                    .entry(key)
-                    .or_insert_with(Vec::new)
-                    .extend(filtered_configs);
-            }
-
             // Merge instruction_configs, append configurations to existing Vec
             for (key, configs) in parse.instruction_configs() {
                 let filtered_configs: Vec<GenericEventParseConfig> = configs

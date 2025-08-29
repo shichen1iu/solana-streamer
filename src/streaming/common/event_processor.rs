@@ -1,7 +1,9 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+use tokio::sync::Semaphore;
 
 use crate::common::AnyResult;
 use crate::streaming::common::{
@@ -14,11 +16,11 @@ use crate::streaming::event_parser::EventParser;
 use crate::streaming::event_parser::{
     core::traits::UnifiedEvent, protocols::mutil::parser::MutilEventParser, Protocol,
 };
-use crate::streaming::grpc::{BackpressureConfig, BatchConfig, EventPretty};
+use crate::streaming::grpc::{BackpressureConfig, EventPretty};
 use crate::streaming::shred::TransactionWithSlot;
 use once_cell::sync::OnceCell;
 
-/// 事件处理器
+/// Event processor
 pub struct EventProcessor {
     pub(crate) metrics_manager: MetricsManager,
     pub(crate) config: ClientConfig,
@@ -27,13 +29,15 @@ pub struct EventProcessor {
     pub(crate) event_type_filter: Option<EventTypeFilter>,
     pub(crate) callback: Option<Arc<dyn Fn(Box<dyn UnifiedEvent>) + Send + Sync>>,
     pub(crate) backpressure_config: BackpressureConfig,
-    pub(crate) batch_config: BatchConfig,
+    /// Backpressure semaphore for controlling concurrent processing count
+    pub(crate) backpressure_semaphore: Arc<Semaphore>,
 }
 
 impl EventProcessor {
-    /// 创建新的事件处理器
+    /// Create a new event processor
     pub fn new(metrics_manager: MetricsManager, config: ClientConfig) -> Self {
         let backpressure_config = config.backpressure.clone();
+        let backpressure_semaphore = Arc::new(Semaphore::new(backpressure_config.permits));
         Self {
             metrics_manager,
             config,
@@ -41,8 +45,8 @@ impl EventProcessor {
             protocols: vec![],
             event_type_filter: None,
             backpressure_config,
-            batch_config: BatchConfig::default(),
             callback: None,
+            backpressure_semaphore,
         }
     }
 
@@ -51,13 +55,15 @@ impl EventProcessor {
         protocols: Vec<Protocol>,
         event_type_filter: Option<EventTypeFilter>,
         backpressure_config: BackpressureConfig,
-        batch_config: BatchConfig,
         callback: Option<Arc<dyn Fn(Box<dyn UnifiedEvent>) + Send + Sync>>,
     ) {
         self.protocols = protocols.clone();
         self.event_type_filter = event_type_filter.clone();
+        // Recreate semaphore if backpressure configuration changes
+        if self.backpressure_config.permits != backpressure_config.permits {
+            self.backpressure_semaphore = Arc::new(Semaphore::new(backpressure_config.permits));
+        }
         self.backpressure_config = backpressure_config;
-        self.batch_config = batch_config;
         self.callback = callback;
         self.parser_cache
             .get_or_init(|| Arc::new(MutilEventParser::new(protocols, event_type_filter)));
@@ -72,8 +78,73 @@ impl EventProcessor {
         event_pretty: EventPretty,
         bot_wallet: Option<Pubkey>,
     ) -> AnyResult<()> {
-        self.process_grpc_event_transaction(event_pretty, bot_wallet).await?;
-        Ok(())
+        // Backpressure control logic
+        let backpressure_start = Instant::now();
+        let result = self.apply_backpressure_control(event_pretty, bot_wallet).await;
+        let backpressure_duration = backpressure_start.elapsed();
+
+        // Record backpressure-related metrics
+        self.metrics_manager.record_backpressure_metrics(
+            backpressure_duration,
+            result.is_ok(),
+            self.backpressure_semaphore.available_permits(),
+        );
+
+        result
+    }
+
+    /// Apply backpressure control strategy
+    async fn apply_backpressure_control(
+        &self,
+        event_pretty: EventPretty,
+        bot_wallet: Option<Pubkey>,
+    ) -> AnyResult<()> {
+        use crate::streaming::common::BackpressureStrategy;
+
+        match self.backpressure_config.strategy {
+            BackpressureStrategy::Block => {
+                // Blocking strategy: acquire semaphore permit
+                let _permit =
+                    self.backpressure_semaphore.acquire().await.map_err(|e| {
+                        anyhow::anyhow!("Failed to acquire backpressure permit: {}", e)
+                    })?;
+                self.process_grpc_event_transaction(event_pretty, bot_wallet).await
+            }
+            BackpressureStrategy::Drop => {
+                // Drop strategy: try to acquire permit, drop if failed
+                match self.backpressure_semaphore.try_acquire() {
+                    Ok(_permit) => {
+                        let result =
+                            self.process_grpc_event_transaction(event_pretty, bot_wallet).await;
+                        result
+                    }
+                    Err(_) => {
+                        // Record dropped event
+                        self.metrics_manager.increment_dropped_events();
+                        Ok(())
+                    }
+                }
+            }
+            BackpressureStrategy::Async => {
+                // Async strategy: process asynchronously regardless of permits
+                self.spawn_async_processing(event_pretty, bot_wallet).await;
+                Ok(())
+            }
+        }
+    }
+
+    /// Process event asynchronously (without waiting for semaphore permit)
+    async fn spawn_async_processing(&self, event_pretty: EventPretty, bot_wallet: Option<Pubkey>) {
+        let processor = self.clone();
+
+        tokio::spawn(async move {
+            // Async strategy: no semaphore control, allow unlimited concurrency
+            // Execute actual event processing directly
+            if let Err(e) = processor.process_grpc_event_transaction(event_pretty, bot_wallet).await
+            {
+                log::error!("Error in async event processing: {}", e);
+            }
+        });
     }
 
     async fn process_grpc_event_transaction(
@@ -81,6 +152,9 @@ impl EventProcessor {
         event_pretty: EventPretty,
         bot_wallet: Option<Pubkey>,
     ) -> AnyResult<()> {
+        if self.callback.is_none() {
+            return Ok(());
+        }
         match event_pretty {
             EventPretty::Account(account_pretty) => {
                 self.metrics_manager.add_account_process_count();
@@ -105,40 +179,36 @@ impl EventProcessor {
                 self.metrics_manager.add_tx_process_count();
                 let slot = transaction_pretty.slot;
                 let signature = transaction_pretty.signature;
-                // 使用缓存获取解析器
+                let tx = transaction_pretty.tx;
+                let block_time = transaction_pretty.block_time;
+                let program_received_time_us = transaction_pretty.program_received_time_us;
+                let transaction_index = transaction_pretty.transaction_index;
+                // Use cache to get parser
                 let parser = self.get_parser();
-                let all_events = parser
-                    .parse_transaction(
-                        transaction_pretty.tx.clone(),
+                let callback = self.callback.clone().unwrap();
+                let metrics_manager = self.metrics_manager.clone();
+                let adapter_callback = Arc::new(move |event: Box<dyn UnifiedEvent>| {
+                    let processing_time_us = event.program_handle_time_consuming_us() as f64;
+                    callback(event);
+                    metrics_manager.update_metrics(
+                        MetricsEventType::Transaction,
+                        1,
+                        processing_time_us,
+                        Some(signature),
+                    );
+                });
+                parser
+                    .parse_transaction_owned(
+                        tx,
                         signature,
                         Some(slot),
-                        transaction_pretty.block_time,
-                        transaction_pretty.program_received_time_us,
+                        block_time,
+                        program_received_time_us,
                         bot_wallet,
-                        transaction_pretty.transaction_index,
+                        transaction_index,
+                        adapter_callback,
                     )
-                    .await
-                    .unwrap_or_else(|_e| vec![]);
-
-                let mut all_time_consuming_us = 0;
-                let event_count = all_events.len();
-
-                // 为所有事件设置交易索引
-                for mut event in all_events {
-                    event.set_program_handle_time_consuming_us(
-                        chrono::Utc::now().timestamp_micros() - event.program_received_time_us(),
-                    );
-                    all_time_consuming_us += event.program_handle_time_consuming_us();
-                    self.invoke_callback(event);
-                }
-
-                // 更新性能指标
-                self.update_metrics(
-                    MetricsEventType::Transaction,
-                    event_count as u64,
-                    all_time_consuming_us as f64,
-                    Some(signature),
-                );
+                    .await?;
             }
             EventPretty::BlockMeta(block_meta_pretty) => {
                 self.metrics_manager.add_block_meta_process_count();
@@ -167,7 +237,7 @@ impl EventProcessor {
         }
     }
 
-    /// 即时处理单个交易
+    /// Process a single transaction immediately
     pub async fn process_shred_transaction_immediate(
         &self,
         transaction_with_slot: TransactionWithSlot,
@@ -176,55 +246,129 @@ impl EventProcessor {
         self.process_shred_transaction(transaction_with_slot, bot_wallet).await
     }
 
+    /// Process shred transaction with backpressure control and performance monitoring
+    pub async fn process_shred_transaction_with_metrics(
+        &self,
+        transaction_with_slot: TransactionWithSlot,
+        bot_wallet: Option<Pubkey>,
+    ) -> AnyResult<()> {
+        // Backpressure control logic
+        let backpressure_start = Instant::now();
+        let result = self.apply_shred_backpressure_control(transaction_with_slot, bot_wallet).await;
+        let backpressure_duration = backpressure_start.elapsed();
+
+        // Record backpressure-related metrics
+        self.metrics_manager.record_backpressure_metrics(
+            backpressure_duration,
+            result.is_ok(),
+            self.backpressure_semaphore.available_permits(),
+        );
+
+        result
+    }
+
+    /// Apply shred backpressure control strategy
+    async fn apply_shred_backpressure_control(
+        &self,
+        transaction_with_slot: TransactionWithSlot,
+        bot_wallet: Option<Pubkey>,
+    ) -> AnyResult<()> {
+        use crate::streaming::common::BackpressureStrategy;
+
+        match self.backpressure_config.strategy {
+            BackpressureStrategy::Block => {
+                // Blocking strategy: acquire semaphore permit
+                let _permit =
+                    self.backpressure_semaphore.acquire().await.map_err(|e| {
+                        anyhow::anyhow!("Failed to acquire backpressure permit: {}", e)
+                    })?;
+                self.process_shred_transaction(transaction_with_slot, bot_wallet).await
+            }
+            BackpressureStrategy::Drop => {
+                // Drop strategy: try to acquire permit, drop if failed
+                match self.backpressure_semaphore.try_acquire() {
+                    Ok(_permit) => {
+                        let result =
+                            self.process_shred_transaction(transaction_with_slot, bot_wallet).await;
+                        result
+                    }
+                    Err(_) => {
+                        // Record dropped event
+                        self.metrics_manager.increment_dropped_events();
+                        Ok(())
+                    }
+                }
+            }
+            BackpressureStrategy::Async => {
+                // Async strategy: process asynchronously regardless of permits
+                self.spawn_async_shred_processing(transaction_with_slot, bot_wallet).await;
+                Ok(())
+            }
+        }
+    }
+
+    /// Process shred event asynchronously (without waiting for semaphore permit)
+    async fn spawn_async_shred_processing(
+        &self,
+        transaction_with_slot: TransactionWithSlot,
+        bot_wallet: Option<Pubkey>,
+    ) {
+        let processor = self.clone();
+
+        tokio::spawn(async move {
+            // Async strategy: no semaphore control, allow unlimited concurrency
+            // Execute actual event processing directly
+            if let Err(e) =
+                processor.process_shred_transaction(transaction_with_slot, bot_wallet).await
+            {
+                log::error!("Error in async shred event processing: {}", e);
+            }
+        });
+    }
+
     pub async fn process_shred_transaction(
         &self,
         transaction_with_slot: TransactionWithSlot,
         bot_wallet: Option<Pubkey>,
     ) -> AnyResult<()> {
+        if self.callback.is_none() {
+            return Ok(());
+        }
         self.metrics_manager.add_tx_process_count();
-        let program_received_time_us = chrono::Utc::now().timestamp_micros();
+        let tx = transaction_with_slot.transaction;
+
         let slot = transaction_with_slot.slot;
-        let versioned_tx = transaction_with_slot.transaction;
-        let signature = versioned_tx.signatures[0];
-
-        // 获取缓存的解析器
+        let signature = tx.signatures[0];
+        let program_received_time_us = transaction_with_slot.program_received_time_us;
+        // Use cache to get parser
         let parser = self.get_parser();
+        let callback = self.callback.clone().unwrap();
+        let metrics_manager = self.metrics_manager.clone();
 
-        let all_events = parser
-            .parse_versioned_transaction(
-                &versioned_tx,
+        let adapter_callback = Arc::new(move |event: Box<dyn UnifiedEvent>| {
+            let processing_time_us = event.program_handle_time_consuming_us() as f64;
+            callback(event);
+            metrics_manager.update_metrics(
+                MetricsEventType::Transaction,
+                1,
+                processing_time_us,
+                Some(signature),
+            );
+        });
+
+        parser
+            .parse_versioned_transaction_owned(
+                tx,
                 signature,
                 Some(slot),
                 None,
                 program_received_time_us,
                 bot_wallet,
                 None,
+                &[],
+                adapter_callback,
             )
-            .await
-            .unwrap_or_else(|_e| vec![]);
-
-        let mut max_time_consuming_us = 0;
-
-        // 保存事件数量用于日志记录
-        let event_count = all_events.len();
-
-        // 即时处理事件
-        for mut event in all_events {
-            event.set_program_handle_time_consuming_us(
-                chrono::Utc::now().timestamp_micros() - event.program_received_time_us(),
-            );
-            max_time_consuming_us =
-                max_time_consuming_us.max(event.program_handle_time_consuming_us());
-            self.invoke_callback(event);
-        }
-
-        // 实际调用性能指标更新
-        self.update_metrics(
-            MetricsEventType::Transaction,
-            event_count as u64,
-            max_time_consuming_us as f64,
-            Some(signature),
-        );
+            .await?;
 
         Ok(())
     }
@@ -240,7 +384,7 @@ impl EventProcessor {
     }
 }
 
-// 实现 Clone trait 以支持模块间共享
+// Implement Clone trait to support sharing between modules
 impl Clone for EventProcessor {
     fn clone(&self) -> Self {
         Self {
@@ -250,8 +394,8 @@ impl Clone for EventProcessor {
             protocols: self.protocols.clone(),
             event_type_filter: self.event_type_filter.clone(),
             backpressure_config: self.backpressure_config.clone(),
-            batch_config: self.batch_config.clone(),
             callback: self.callback.clone(),
+            backpressure_semaphore: self.backpressure_semaphore.clone(),
         }
     }
 }
