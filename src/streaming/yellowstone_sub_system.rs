@@ -48,7 +48,7 @@ impl YellowstoneGrpc {
             addrs,
             None,
         );
-        let (mut subscribe_tx, mut stream) = self
+        let (mut subscribe_tx, mut stream, _) = self
             .subscription_manager
             .subscribe_with_request(transactions, None, None, None)
             .await?;
