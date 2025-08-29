@@ -49,6 +49,7 @@ impl SubscriptionManager {
     ) -> AnyResult<(
         impl Sink<SubscribeRequest, Error = mpsc::SendError>,
         impl Stream<Item = Result<SubscribeUpdate, Status>>,
+        SubscribeRequest,
     )> {
         let blocks_meta = if event_type_filter.is_some()
             && event_type_filter.as_ref().unwrap().include_block_event()
@@ -71,8 +72,8 @@ impl SubscriptionManager {
             ..Default::default()
         };
         let mut client = self.connect().await?;
-        let (sink, stream) = client.subscribe_with_request(Some(subscribe_request)).await?;
-        Ok((sink, stream))
+        let (sink, stream) = client.subscribe_with_request(Some(subscribe_request.clone())).await?;
+        Ok((sink, stream, subscribe_request))
     }
 
     /// 创建账户订阅请求并返回流
