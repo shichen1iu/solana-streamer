@@ -1,10 +1,16 @@
+use std::sync::Arc;
+
+use futures::StreamExt;
 use solana_sdk::pubkey::Pubkey;
 
 use crate::common::AnyResult;
-use crate::streaming::common::{EventBatchProcessor, SubscriptionHandle};
+use crate::protos::shredstream::SubscribeEntriesRequest;
+use crate::streaming::common::{EventProcessor, SubscriptionHandle};
 use crate::streaming::event_parser::common::filter::EventTypeFilter;
 use crate::streaming::event_parser::{Protocol, UnifiedEvent};
-use crate::streaming::shred::{ShredEventProcessor, ShredStreamHandler, TransactionWithSlot};
+use crate::streaming::shred::TransactionWithSlot;
+use log::error;
+use solana_entry::entry::Entry;
 
 use super::ShredStreamGrpc;
 
@@ -29,120 +35,61 @@ impl ShredStreamGrpc {
             metrics_handle = self.metrics_manager.start_auto_monitoring().await;
         }
 
-        // 启动流处理
-        let client = (*self.shredstream_client).clone();
-        let (stream_task, rx) = ShredStreamHandler::start_stream_processing(
-            client,
-            self.config.backpressure.channel_size,
-        )
-        .await?;
+        // 创建事件处理器
+        let mut event_processor =
+            EventProcessor::new(self.metrics_manager.clone(), self.config.clone());
+        event_processor.set_protocols_and_event_type_filter(
+            protocols,
+            event_type_filter,
+            self.config.backpressure.clone(),
+            Some(Arc::new(callback)),
+        );
 
-        // 根据配置选择处理模式并获取事件处理任务句柄
-        let event_handle = if self.config.batch.enabled {
-            // 批处理模式
-            self.process_with_batch(rx, protocols, bot_wallet, event_type_filter, callback).await?
-        } else {
-            // 即时处理模式
-            self.process_immediate(rx, protocols, bot_wallet, event_type_filter, callback).await?
-        };
+        // 启动流处理
+        let mut client = (*self.shredstream_client).clone();
+        let request = tonic::Request::new(SubscribeEntriesRequest {});
+        let mut stream = client.subscribe_entries(request).await?.into_inner();
+        let event_processor_clone = event_processor.clone();
+        let stream_task = tokio::spawn(async move {
+            while let Some(message) = stream.next().await {
+                match message {
+                    Ok(msg) => {
+                        if let Ok(entries) = bincode::deserialize::<Vec<Entry>>(&msg.entries) {
+                            for entry in entries {
+                                for transaction in entry.transactions {
+                                    let transaction_with_slot = TransactionWithSlot::new(
+                                        transaction.clone(),
+                                        msg.slot,
+                                        chrono::Utc::now().timestamp_micros(),
+                                    );
+                                    // 直接处理，背压控制在 EventProcessor 内部处理
+                                    if let Err(e) = event_processor_clone
+                                        .process_shred_transaction_with_metrics(
+                                            transaction_with_slot,
+                                            bot_wallet,
+                                        )
+                                        .await
+                                    {
+                                        error!("Error handling message: {e:?}");
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Err(error) => {
+                        error!("Stream error: {error:?}");
+                        break;
+                    }
+                }
+            }
+        });
 
         // 保存订阅句柄
-        let subscription_handle = SubscriptionHandle::new(stream_task, event_handle, metrics_handle);
+        let subscription_handle = SubscriptionHandle::new(stream_task, None, metrics_handle);
         let mut handle_guard = self.subscription_handle.lock().await;
         *handle_guard = Some(subscription_handle);
 
         Ok(())
-    }
-
-    /// 批处理模式
-    async fn process_with_batch<F>(
-        &self,
-        mut rx: futures::channel::mpsc::Receiver<TransactionWithSlot>,
-        protocols: Vec<Protocol>,
-        bot_wallet: Option<Pubkey>,
-        event_type_filter: Option<EventTypeFilter>,
-        callback: F,
-    ) -> AnyResult<tokio::task::JoinHandle<()>>
-    where
-        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
-    {
-        use futures::StreamExt;
-
-        // 创建批处理器，将单个事件回调转换为批量回调
-        let batch_callback = move |events: Vec<Box<dyn UnifiedEvent>>| {
-            for event in events {
-                callback(event);
-            }
-        };
-
-        let mut batch_processor = EventBatchProcessor::new(
-            batch_callback,
-            self.config.batch.batch_size,
-            self.config.batch.batch_timeout_ms,
-        );
-
-        // 创建事件处理器
-        let event_processor =
-            ShredEventProcessor::new(self.metrics_manager.clone(), self.config.clone());
-
-        let event_handle = tokio::spawn(async move {
-            while let Some(transaction_with_slot) = rx.next().await {
-                if let Err(e) = event_processor
-                    .process_transaction_with_batch(
-                        transaction_with_slot,
-                        protocols.clone(),
-                        bot_wallet,
-                        &mut batch_processor,
-                        event_type_filter.clone(),
-                    )
-                    .await
-                {
-                    log::error!("Error processing transaction: {e:?}");
-                }
-            }
-
-            // 处理剩余的事件
-            batch_processor.flush();
-        });
-
-        Ok(event_handle)
-    }
-
-    /// 即时处理模式
-    async fn process_immediate<F>(
-        &self,
-        mut rx: futures::channel::mpsc::Receiver<TransactionWithSlot>,
-        protocols: Vec<Protocol>,
-        bot_wallet: Option<Pubkey>,
-        event_type_filter: Option<EventTypeFilter>,
-        callback: F,
-    ) -> AnyResult<tokio::task::JoinHandle<()>>
-    where
-        F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
-    {
-        use futures::StreamExt;
-
-        // 创建事件处理器
-        let event_processor =
-            ShredEventProcessor::new(self.metrics_manager.clone(), self.config.clone());
-
-        let event_handle = tokio::spawn(async move {
-            while let Some(transaction_with_slot) = rx.next().await {
-                if let Err(e) = event_processor
-                    .process_transaction_immediate(
-                        transaction_with_slot,
-                        protocols.clone(),
-                        bot_wallet,
-                        event_type_filter.clone(),
-                        &callback,
-                    )
-                    .await
-                {
-                    log::error!("Error processing transaction: {e:?}");
-                }
-            }
-        });
-
-        Ok(event_handle)
     }
 }

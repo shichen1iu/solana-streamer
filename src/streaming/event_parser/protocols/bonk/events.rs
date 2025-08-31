@@ -314,8 +314,12 @@ impl_unified_event!(BonkPlatformConfigAccountEvent,);
 /// Event discriminator constants
 pub mod discriminators {
     // Event discriminators
-    pub const TRADE_EVENT: &str = "0xe445a52e51cb9a1dbddb7fd34ee661ee";
-    pub const POOL_CREATE_EVENT: &str = "0xe445a52e51cb9a1d97d7e20976a173ae";
+    // pub const TRADE_EVENT: &str = "0xe445a52e51cb9a1dbddb7fd34ee661ee";
+    pub const TRADE_EVENT: &[u8] =
+        &[228, 69, 165, 46, 81, 203, 154, 29, 189, 219, 127, 211, 78, 230, 97, 238];
+    // pub const POOL_CREATE_EVENT: &str = "0xe445a52e51cb9a1d97d7e20976a173ae";
+    pub const POOL_CREATE_EVENT: &[u8] =
+        &[228, 69, 165, 46, 81, 203, 154, 29, 151, 215, 226, 9, 118, 161, 115, 174];
 
     // Instruction discriminators
     pub const BUY_EXACT_IN: &[u8] = &[250, 234, 13, 123, 213, 156, 19, 236];

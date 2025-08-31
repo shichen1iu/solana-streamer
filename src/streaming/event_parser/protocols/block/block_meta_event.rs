@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::impl_unified_event;
 use crate::streaming::event_parser::common::{types::EventType, EventMetadata};
 use borsh::BorshDeserialize;
@@ -13,18 +15,24 @@ pub struct BlockMetaEvent {
 }
 
 impl BlockMetaEvent {
-    pub fn new(slot: u64, block_hash: String, block_time_ms: i64) -> Self {
+    pub fn new(
+        slot: u64,
+        block_hash: String,
+        block_time_ms: i64,
+        program_received_time_us: i64,
+    ) -> Self {
         let metadata = EventMetadata::new(
-            format!("block_{}_{}", slot, block_hash),
-            "".to_string(),
+            Cow::Borrowed(""),
             slot,
             block_time_ms / 1000,
             block_time_ms,
             crate::streaming::event_parser::common::types::ProtocolType::Common,
             EventType::BlockMeta,
             solana_sdk::pubkey::Pubkey::default(),
-            "".to_string(),
-            chrono::Utc::now().timestamp_millis(),
+            0,
+            None,
+            program_received_time_us,
+            None,
         );
         Self { metadata, slot, block_hash }
     }

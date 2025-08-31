@@ -1,16 +1,15 @@
-use std::collections::HashMap;
+use solana_sdk::pubkey::Pubkey;
 
-use prost_types::Timestamp;
-use solana_sdk::{instruction::CompiledInstruction, pubkey::Pubkey};
-use solana_transaction_status::UiCompiledInstruction;
-
-use crate::streaming::event_parser::{
-    common::{EventMetadata, EventType, ProtocolType},
-    core::traits::{EventParser, GenericEventParseConfig, GenericEventParser, UnifiedEvent},
-    protocols::pumpfun::{
-        discriminators, pumpfun_create_token_event_log_decode, pumpfun_migrate_event_log_decode,
-        pumpfun_trade_event_log_decode, PumpFunCreateTokenEvent, PumpFunMigrateEvent,
-        PumpFunTradeEvent,
+use crate::{
+    impl_event_parser_delegate,
+    streaming::event_parser::{
+        common::{EventMetadata, EventType, ProtocolType},
+        core::traits::{GenericEventParseConfig, GenericEventParser, UnifiedEvent},
+        protocols::pumpfun::{
+            discriminators, pumpfun_create_token_event_log_decode,
+            pumpfun_migrate_event_log_decode, pumpfun_trade_event_log_decode,
+            PumpFunCreateTokenEvent, PumpFunMigrateEvent, PumpFunTradeEvent,
+        },
     },
 };
 
@@ -82,8 +81,6 @@ impl PumpFunEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = pumpfun_migrate_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!("{}-{}-{}", metadata.signature, event.user, event.mint));
             Some(Box::new(PumpFunMigrateEvent { metadata, ..event }))
         } else {
             None
@@ -96,11 +93,6 @@ impl PumpFunEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = pumpfun_create_token_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!(
-                "{}-{}-{}-{}",
-                metadata.signature, event.name, event.symbol, event.mint
-            ));
             Some(Box::new(PumpFunCreateTokenEvent { metadata, ..event }))
         } else {
             None
@@ -113,11 +105,6 @@ impl PumpFunEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = pumpfun_trade_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!(
-                "{}-{}-{}-{}",
-                metadata.signature, event.mint, event.user, event.is_buy
-            ));
             Some(Box::new(PumpFunTradeEvent { metadata, ..event }))
         } else {
             None
@@ -152,9 +139,6 @@ impl PumpFunEventParser {
             Pubkey::default()
         };
 
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}-{}", metadata.signature, name, symbol, accounts[0]));
-
         Some(Box::new(PumpFunCreateTokenEvent {
             metadata,
             name: name.to_string(),
@@ -181,8 +165,6 @@ impl PumpFunEventParser {
         }
         let amount = u64::from_le_bytes(data[0..8].try_into().unwrap());
         let max_sol_cost = u64::from_le_bytes(data[8..16].try_into().unwrap());
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}-{}", metadata.signature, accounts[2], accounts[6], true));
         Some(Box::new(PumpFunTradeEvent {
             metadata,
             global: accounts[0],
@@ -217,9 +199,6 @@ impl PumpFunEventParser {
         }
         let amount = u64::from_le_bytes(data[0..8].try_into().unwrap());
         let min_sol_output = u64::from_le_bytes(data[8..16].try_into().unwrap());
-        let mut metadata = metadata;
-        metadata
-            .set_id(format!("{}-{}-{}-{}", metadata.signature, accounts[2], accounts[6], false));
         Some(Box::new(PumpFunTradeEvent {
             metadata,
             global: accounts[0],
@@ -252,8 +231,6 @@ impl PumpFunEventParser {
         if accounts.len() < 24 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[5], accounts[2]));
         Some(Box::new(PumpFunMigrateEvent {
             metadata,
             global: accounts[0],
@@ -285,59 +262,4 @@ impl PumpFunEventParser {
     }
 }
 
-#[async_trait::async_trait]
-impl EventParser for PumpFunEventParser {
-    fn inner_instruction_configs(&self) -> HashMap<&'static str, Vec<GenericEventParseConfig>> {
-        self.inner.inner_instruction_configs()
-    }
-    fn instruction_configs(&self) -> HashMap<Vec<u8>, Vec<GenericEventParseConfig>> {
-        self.inner.instruction_configs()
-    }
-    fn parse_events_from_inner_instruction(
-        &self,
-        inner_instruction: &UiCompiledInstruction,
-        signature: &str,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_ms: i64,
-        index: String,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_inner_instruction(
-            inner_instruction,
-            signature,
-            slot,
-            block_time,
-            program_received_time_ms,
-            index,
-        )
-    }
-
-    fn parse_events_from_instruction(
-        &self,
-        instruction: &CompiledInstruction,
-        accounts: &[Pubkey],
-        signature: &str,
-        slot: u64,
-        block_time: Option<Timestamp>,
-        program_received_time_ms: i64,
-        index: String,
-    ) -> Vec<Box<dyn UnifiedEvent>> {
-        self.inner.parse_events_from_instruction(
-            instruction,
-            accounts,
-            signature,
-            slot,
-            block_time,
-            program_received_time_ms,
-            index,
-        )
-    }
-
-    fn should_handle(&self, program_id: &Pubkey) -> bool {
-        self.inner.should_handle(program_id)
-    }
-
-    fn supported_program_ids(&self) -> Vec<Pubkey> {
-        self.inner.supported_program_ids()
-    }
-}
+impl_event_parser_delegate!(PumpFunEventParser);
