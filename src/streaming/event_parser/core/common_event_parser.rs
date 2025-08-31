@@ -1,4 +1,4 @@
-use crate::streaming::event_parser::core::traits::UnifiedEvent;
+use crate::streaming::event_parser::core::traits::{UnifiedEvent, get_high_perf_clock};
 use crate::streaming::event_parser::protocols::block::block_meta_event::BlockMetaEvent;
 
 pub struct CommonEventParser {}
@@ -17,7 +17,7 @@ impl CommonEventParser {
             program_received_time_us,
         );
         block_meta_event.set_program_handle_time_consuming_us(
-            chrono::Utc::now().timestamp_micros() - program_received_time_us,
+            get_high_perf_clock().elapsed_micros_since(program_received_time_us),
         );
         Box::new(block_meta_event)
     }

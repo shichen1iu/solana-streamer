@@ -1,11 +1,9 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use solana_sdk::signature::Signature;
-
 use super::constants::*;
 
-/// 事件类型枚举
+/// Event type enumeration
 #[derive(Debug, Clone, Copy)]
 pub enum EventType {
     Transaction = 0,
@@ -13,7 +11,7 @@ pub enum EventType {
     BlockMeta = 2,
 }
 
-/// 兼容性别名
+/// Compatibility alias
 pub type MetricsEventType = EventType;
 
 impl EventType {
@@ -30,18 +28,18 @@ impl EventType {
         }
     }
 
-    // 兼容性常量
+    // Compatibility constants
     pub const TX: EventType = EventType::Transaction;
 }
 
-/// 高性能原子事件指标
+/// High-performance atomic event metrics
 #[derive(Debug)]
 struct AtomicEventMetrics {
     process_count: AtomicU64,
     events_processed: AtomicU64,
     events_in_window: AtomicU64,
     window_start_nanos: AtomicU64,
-    events_per_second_bits: AtomicU64, // f64 的位表示
+    events_per_second_bits: AtomicU64, // Bit representation of f64
 }
 
 impl AtomicEventMetrics {
@@ -55,20 +53,20 @@ impl AtomicEventMetrics {
         }
     }
 
-    /// 原子地增加处理计数
+    /// Atomically increment process count
     #[inline]
     fn add_process_count(&self) {
         self.process_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// 原子地增加事件处理数量
+    /// Atomically increment event processing count
     #[inline]
     fn add_events_processed(&self, count: u64) {
         self.events_processed.fetch_add(count, Ordering::Relaxed);
         self.events_in_window.fetch_add(count, Ordering::Relaxed);
     }
 
-    /// 获取当前计数（非阻塞）
+    /// Get current count (non-blocking)
     #[inline]
     fn get_counts(&self) -> (u64, u64, u64) {
         (
@@ -78,19 +76,19 @@ impl AtomicEventMetrics {
         )
     }
 
-    /// 原子地更新每秒事件数
+    /// Atomically update events per second
     #[inline]
     fn update_events_per_second(&self, eps: f64) {
         self.events_per_second_bits.store(eps.to_bits(), Ordering::Relaxed);
     }
 
-    /// 获取每秒事件数
+    /// Get events per second
     #[inline]
     fn get_events_per_second(&self) -> f64 {
         f64::from_bits(self.events_per_second_bits.load(Ordering::Relaxed))
     }
 
-    /// 重置窗口计数
+    /// Reset window count
     #[inline]
     fn reset_window(&self, new_start_nanos: u64) {
         self.events_in_window.store(0, Ordering::Relaxed);
@@ -103,13 +101,14 @@ impl AtomicEventMetrics {
     }
 }
 
-/// 高性能原子处理时间统计
+/// High-performance atomic processing time statistics
 #[derive(Debug)]
 struct AtomicProcessingTimeStats {
     min_time_bits: AtomicU64,
     max_time_bits: AtomicU64,
-    max_time_timestamp_nanos: AtomicU64, // 最大值更新时间戳（纳秒）
-    total_time_us: AtomicU64,            // 存储微秒的整数部分
+    min_time_timestamp_nanos: AtomicU64, // Timestamp of min value update (nanoseconds)
+    max_time_timestamp_nanos: AtomicU64, // Timestamp of max value update (nanoseconds)
+    total_time_us: AtomicU64,            // Store integer part of microseconds
     total_events: AtomicU64,
 }
 
@@ -122,13 +121,14 @@ impl AtomicProcessingTimeStats {
         Self {
             min_time_bits: AtomicU64::new(f64::INFINITY.to_bits()),
             max_time_bits: AtomicU64::new(0),
+            min_time_timestamp_nanos: AtomicU64::new(now_nanos),
             max_time_timestamp_nanos: AtomicU64::new(now_nanos),
             total_time_us: AtomicU64::new(0),
             total_events: AtomicU64::new(0),
         }
     }
 
-    /// 原子地更新处理时间统计
+    /// Atomically update processing time statistics
     #[inline]
     fn update(&self, time_us: f64, event_count: u64) {
         let time_bits = time_us.to_bits();
@@ -136,8 +136,20 @@ impl AtomicProcessingTimeStats {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
                 as u64;
 
-        // 更新最小值（使用 compare_exchange_weak 循环）
+        // Update minimum value, check time difference and reset if over 10 seconds
         let mut current_min = self.min_time_bits.load(Ordering::Relaxed);
+        let min_timestamp = self.min_time_timestamp_nanos.load(Ordering::Relaxed);
+        
+        // Check if min value timestamp exceeds 10 seconds (10_000_000_000 nanoseconds)
+        let min_time_diff_nanos = now_nanos.saturating_sub(min_timestamp);
+        if min_time_diff_nanos > 10_000_000_000 {
+            // Over 10 seconds, reset min value
+            self.min_time_bits.store(f64::INFINITY.to_bits(), Ordering::Relaxed);
+            self.min_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
+            current_min = f64::INFINITY.to_bits();
+        }
+        
+        // If current time is less than min value, update min value and timestamp
         while time_bits < current_min {
             match self.min_time_bits.compare_exchange_weak(
                 current_min,
@@ -145,25 +157,29 @@ impl AtomicProcessingTimeStats {
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => break,
+                Ok(_) => {
+                    // Successfully updated min value, also update timestamp
+                    self.min_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
+                    break;
+                }
                 Err(x) => current_min = x,
             }
         }
 
-        // 更新最大值，检查时间差并在超过10秒时清零
+        // Update maximum value, check time difference and reset if over 10 seconds
         let mut current_max = self.max_time_bits.load(Ordering::Relaxed);
         let max_timestamp = self.max_time_timestamp_nanos.load(Ordering::Relaxed);
 
-        // 检查最大值的时间戳是否超过10秒（10_000_000_000纳秒）
+        // Check if max value timestamp exceeds 10 seconds (10_000_000_000 nanoseconds)
         let time_diff_nanos = now_nanos.saturating_sub(max_timestamp);
         if time_diff_nanos > 10_000_000_000 {
-            // 超过10秒，清零最大值
+            // Over 10 seconds, reset max value
             self.max_time_bits.store(0, Ordering::Relaxed);
             self.max_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
             current_max = 0;
         }
 
-        // 如果当前时间大于最大值，更新最大值和时间戳
+        // If current time is greater than max value, update max value and timestamp
         while time_bits > current_max {
             match self.max_time_bits.compare_exchange_weak(
                 current_max,
@@ -172,7 +188,7 @@ impl AtomicProcessingTimeStats {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
-                    // 成功更新最大值，同时更新时间戳
+                    // Successfully updated max value, also update timestamp
                     self.max_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
                     break;
                 }
@@ -180,13 +196,13 @@ impl AtomicProcessingTimeStats {
             }
         }
 
-        // 更新累计值（将微秒转换为整数避免浮点累加问题）
+        // Update cumulative values (convert microseconds to integers to avoid floating point accumulation issues)
         let total_time_us_int = (time_us * event_count as f64) as u64;
         self.total_time_us.fetch_add(total_time_us_int, Ordering::Relaxed);
         self.total_events.fetch_add(event_count, Ordering::Relaxed);
     }
 
-    /// 获取统计值（非阻塞）
+    /// Get statistics (non-blocking)
     #[inline]
     fn get_stats(&self) -> ProcessingTimeStats {
         let min_bits = self.min_time_bits.load(Ordering::Relaxed);
@@ -207,7 +223,7 @@ impl AtomicProcessingTimeStats {
     }
 }
 
-/// 处理时间统计结果
+/// Processing time statistics result
 #[derive(Debug, Clone)]
 pub struct ProcessingTimeStats {
     pub min_us: f64,
@@ -215,7 +231,7 @@ pub struct ProcessingTimeStats {
     pub avg_us: f64,
 }
 
-/// 事件指标快照
+/// Event metrics snapshot
 #[derive(Debug, Clone)]
 pub struct EventMetricsSnapshot {
     pub process_count: u64,
@@ -223,19 +239,7 @@ pub struct EventMetricsSnapshot {
     pub events_per_second: f64,
 }
 
-/// 背压指标快照
-#[derive(Debug, Clone)]
-pub struct BackpressureMetricsSnapshot {
-    pub total_duration_us: u64,
-    pub success_count: u64,
-    pub failure_count: u64,
-    pub min_permits: u64,
-    pub max_permits: u64,
-    pub avg_duration_us: f64,
-    pub success_rate: f64,
-}
-
-/// 兼容性结构 - 完整的性能指标
+/// Compatibility structure - complete performance metrics
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
     pub uptime: std::time::Duration,
@@ -243,25 +247,15 @@ pub struct PerformanceMetrics {
     pub account_metrics: EventMetricsSnapshot,
     pub block_meta_metrics: EventMetricsSnapshot,
     pub processing_stats: ProcessingTimeStats,
-    pub backpressure_metrics: BackpressureMetricsSnapshot,
     pub dropped_events_count: u64,
 }
 
 impl PerformanceMetrics {
-    /// 创建默认的性能指标（兼容性方法）
+    /// Create default performance metrics (compatibility method)
     pub fn new() -> Self {
         let default_metrics =
             EventMetricsSnapshot { process_count: 0, events_processed: 0, events_per_second: 0.0 };
         let default_stats = ProcessingTimeStats { min_us: 0.0, max_us: 0.0, avg_us: 0.0 };
-        let default_backpressure = BackpressureMetricsSnapshot {
-            total_duration_us: 0,
-            success_count: 0,
-            failure_count: 0,
-            min_permits: 0,
-            max_permits: 0,
-            avg_duration_us: 0.0,
-            success_rate: 0.0,
-        };
 
         Self {
             uptime: std::time::Duration::ZERO,
@@ -269,24 +263,17 @@ impl PerformanceMetrics {
             account_metrics: default_metrics.clone(),
             block_meta_metrics: default_metrics,
             processing_stats: default_stats,
-            backpressure_metrics: default_backpressure,
             dropped_events_count: 0,
         }
     }
 }
 
-/// 高性能指标系统
+/// High-performance metrics system
 #[derive(Debug)]
 pub struct HighPerformanceMetrics {
     start_nanos: u64,
     event_metrics: [AtomicEventMetrics; 3],
     processing_stats: AtomicProcessingTimeStats,
-    // 背压相关指标
-    backpressure_total_duration_us: AtomicU64,
-    backpressure_success_count: AtomicU64,
-    backpressure_failure_count: AtomicU64,
-    backpressure_min_permits: AtomicU64,
-    backpressure_max_permits: AtomicU64,
     // 丢弃事件指标
     dropped_events_count: AtomicU64,
 }
@@ -305,12 +292,6 @@ impl HighPerformanceMetrics {
                 AtomicEventMetrics::new(now_nanos),
             ],
             processing_stats: AtomicProcessingTimeStats::new(),
-            // 初始化背压相关指标
-            backpressure_total_duration_us: AtomicU64::new(0),
-            backpressure_success_count: AtomicU64::new(0),
-            backpressure_failure_count: AtomicU64::new(0),
-            backpressure_min_permits: AtomicU64::new(u64::MAX), // 初始化为最大值，便于后续比较
-            backpressure_max_permits: AtomicU64::new(0),
             // 初始化丢弃事件指标
             dropped_events_count: AtomicU64::new(0),
         }
@@ -339,32 +320,6 @@ impl HighPerformanceMetrics {
     #[inline]
     pub fn get_processing_stats(&self) -> ProcessingTimeStats {
         self.processing_stats.get_stats()
-    }
-
-    /// 获取背压指标快照
-    #[inline]
-    pub fn get_backpressure_metrics(&self) -> BackpressureMetricsSnapshot {
-        let total_duration_us = self.backpressure_total_duration_us.load(Ordering::Relaxed);
-        let success_count = self.backpressure_success_count.load(Ordering::Relaxed);
-        let failure_count = self.backpressure_failure_count.load(Ordering::Relaxed);
-        let min_permits = self.backpressure_min_permits.load(Ordering::Relaxed);
-        let max_permits = self.backpressure_max_permits.load(Ordering::Relaxed);
-
-        let total_count = success_count + failure_count;
-        let avg_duration_us =
-            if total_count > 0 { total_duration_us as f64 / total_count as f64 } else { 0.0 };
-        let success_rate =
-            if total_count > 0 { success_count as f64 / total_count as f64 } else { 0.0 };
-
-        BackpressureMetricsSnapshot {
-            total_duration_us,
-            success_count,
-            failure_count,
-            min_permits: if min_permits == u64::MAX { 0 } else { min_permits },
-            max_permits,
-            avg_duration_us,
-            success_rate,
-        }
     }
 
     /// 获取丢弃事件计数
@@ -509,19 +464,13 @@ impl MetricsManager {
 
     /// 记录慢处理操作
     #[inline]
-    pub fn log_slow_processing(
-        &self,
-        processing_time_us: f64,
-        event_count: usize,
-        signature: Option<Signature>,
-    ) {
+    pub fn log_slow_processing(&self, processing_time_us: f64, event_count: usize) {
         if processing_time_us > SLOW_PROCESSING_THRESHOLD_US {
-            log::warn!(
-                "{} slow processing: {:.2}us for {} events, signature: {:?}",
+            log::debug!(
+                "{} slow processing: {:.2}us for {} events",
                 self.stream_name,
                 processing_time_us,
                 event_count,
-                signature
             );
         }
     }
@@ -541,11 +490,6 @@ impl MetricsManager {
         self.metrics.get_processing_stats()
     }
 
-    /// 获取背压指标
-    pub fn get_backpressure_metrics(&self) -> BackpressureMetricsSnapshot {
-        self.metrics.get_backpressure_metrics()
-    }
-
     /// 获取丢弃事件计数
     pub fn get_dropped_events_count(&self) -> u64 {
         self.metrics.get_dropped_events_count()
@@ -555,22 +499,6 @@ impl MetricsManager {
     pub fn print_metrics(&self) {
         println!("\n📊 {} Performance Metrics", self.stream_name);
         println!("   Run Time: {:?}", self.get_uptime());
-
-        // 打印背压指标表格
-        let backpressure = self.get_backpressure_metrics();
-        if backpressure.success_count > 0 || backpressure.failure_count > 0 {
-            println!("\n🚦 Backpressure Metrics");
-            println!("┌──────────────────────┬─────────────┐");
-            println!("│ Metric               │ Value       │");
-            println!("├──────────────────────┼─────────────┤");
-            println!("│ Success Count        │ {:11} │", backpressure.success_count);
-            println!("│ Failure Count        │ {:11} │", backpressure.failure_count);
-            println!("│ Success Rate         │ {:11.2} │", backpressure.success_rate * 100.0);
-            println!("│ Avg Duration (ms)    │ {:11.2} │", backpressure.avg_duration_us / 1000.0);
-            println!("│ Min Permits          │ {:11} │", backpressure.min_permits);
-            println!("│ Max Permits          │ {:11} │", backpressure.max_permits);
-            println!("└──────────────────────┴─────────────┘");
-        }
 
         // 打印丢弃事件指标
         let dropped_count = self.get_dropped_events_count();
@@ -603,7 +531,7 @@ impl MetricsManager {
         println!("│ Metric                │ Value (us)  │");
         println!("├───────────────────────┼─────────────┤");
         println!("│ Average               │ {:9.2}   │", stats.avg_us);
-        println!("│ Minimum               │ {:9.2}   │", stats.min_us);
+        println!("│ Minimum within 10s    │ {:9.2}   │", stats.min_us);
         println!("│ Maximum within 10s    │ {:9.2}   │", stats.max_us);
         println!("└───────────────────────┴─────────────┘");
 
@@ -648,7 +576,6 @@ impl MetricsManager {
             account_metrics: self.get_event_metrics(EventType::Account),
             block_meta_metrics: self.get_event_metrics(EventType::BlockMeta),
             processing_stats: self.get_processing_stats(),
-            backpressure_metrics: self.metrics.get_backpressure_metrics(),
             dropped_events_count: self.metrics.get_dropped_events_count(),
         }
     }
@@ -678,76 +605,9 @@ impl MetricsManager {
         event_type: MetricsEventType,
         events_processed: u64,
         processing_time_us: f64,
-        signature: Option<Signature>,
     ) {
         self.record_events(event_type, events_processed, processing_time_us);
-        self.log_slow_processing(processing_time_us, events_processed as usize, signature);
-    }
-
-    /// 记录背压相关的metrics
-    #[inline]
-    pub fn record_backpressure_metrics(
-        &self,
-        backpressure_duration: std::time::Duration,
-        success: bool,
-        available_permits: usize,
-    ) {
-        if !self.enable_metrics {
-            return;
-        }
-
-        let duration_us = backpressure_duration.as_micros() as u64;
-        let permits = available_permits as u64;
-
-        // 记录总持续时间
-        self.metrics.backpressure_total_duration_us.fetch_add(duration_us, Ordering::Relaxed);
-
-        // 记录成功/失败计数
-        if success {
-            self.metrics.backpressure_success_count.fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.metrics.backpressure_failure_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        // 更新最小许可数（使用 compare_exchange_weak 循环）
-        let mut current_min = self.metrics.backpressure_min_permits.load(Ordering::Relaxed);
-        while permits < current_min {
-            match self.metrics.backpressure_min_permits.compare_exchange_weak(
-                current_min,
-                permits,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(x) => current_min = x,
-            }
-        }
-
-        // 更新最大许可数
-        let mut current_max = self.metrics.backpressure_max_permits.load(Ordering::Relaxed);
-        while permits > current_max {
-            match self.metrics.backpressure_max_permits.compare_exchange_weak(
-                current_max,
-                permits,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(x) => current_max = x,
-            }
-        }
-
-        // 记录慢背压操作的日志
-        if duration_us > 10_000 {
-            // 超过10ms的背压认为是慢操作
-            log::warn!(
-                "{} slow backpressure: {:.2}ms, success: {}, available_permits: {}",
-                self.stream_name,
-                duration_us as f64 / 1000.0,
-                success,
-                available_permits
-            );
-        }
+        self.log_slow_processing(processing_time_us, events_processed as usize);
     }
 
     /// 增加丢弃事件计数
@@ -762,7 +622,7 @@ impl MetricsManager {
 
         // 每丢弃1000个事件记录一次警告日志
         if new_count % 1000 == 0 {
-            log::warn!("{} dropped events count reached: {}", self.stream_name, new_count);
+            log::debug!("{} dropped events count reached: {}", self.stream_name, new_count);
         }
     }
 
@@ -774,17 +634,22 @@ impl MetricsManager {
         }
 
         // 原子地增加丢弃事件计数
-        let new_count = self.metrics.dropped_events_count.fetch_add(count, Ordering::Relaxed) + count;
+        let new_count =
+            self.metrics.dropped_events_count.fetch_add(count, Ordering::Relaxed) + count;
 
         // 记录批量丢弃事件的日志
         if count > 1 {
-            log::warn!("{} dropped batch of {} events, total dropped: {}", 
-                self.stream_name, count, new_count);
+            log::debug!(
+                "{} dropped batch of {} events, total dropped: {}",
+                self.stream_name,
+                count,
+                new_count
+            );
         }
 
         // 每丢弃1000个事件记录一次警告日志
         if new_count % 1000 == 0 || (new_count / 1000) != ((new_count - count) / 1000) {
-            log::warn!("{} dropped events count reached: {}", self.stream_name, new_count);
+            log::debug!("{} dropped events count reached: {}", self.stream_name, new_count);
         }
     }
 }

@@ -7,8 +7,6 @@ pub enum BackpressureStrategy {
     Block,
     /// Drop messages
     Drop,
-    /// Execute asynchronously (don't wait for completion)
-    Async,
 }
 
 impl Default for BackpressureStrategy {
@@ -87,7 +85,7 @@ impl StreamClientConfig {
         Self {
             connection: ConnectionConfig::default(),
             backpressure: BackpressureConfig {
-                permits: 5000,
+                permits: 20000,
                 strategy: BackpressureStrategy::Drop,
             },
             enable_metrics: false,
@@ -99,35 +97,16 @@ impl StreamClientConfig {
     /// This configuration prioritizes latency over throughput by:
     /// - Processing events immediately without buffering
     /// - Implementing a blocking backpressure strategy to ensure no data loss
-    /// - Setting minimal permits (1) to minimize memory usage
+    /// - Setting optimal permits (4000) for balanced throughput and latency
     ///
     /// Ideal for scenarios where every millisecond counts and you cannot
     /// afford to lose any events, such as trading applications or real-time monitoring.
     pub fn low_latency() -> Self {
         Self {
             connection: ConnectionConfig::default(),
-            backpressure: BackpressureConfig { permits: 1, strategy: BackpressureStrategy::Block },
+            backpressure: BackpressureConfig { permits: 4000, strategy: BackpressureStrategy::Block },
             enable_metrics: false,
         }
     }
 
-    /// Creates an asynchronous processing configuration optimized for high-volume scenarios.
-    ///
-    /// This configuration balances throughput and reliability by:
-    /// - Implementing an async backpressure strategy for non-blocking operation
-    /// - Setting a balanced permit buffer (5,000) for steady flow
-    ///
-    /// Ideal for scenarios where you need sustained high throughput with
-    /// fire-and-forget semantics, such as data ingestion pipelines or
-    /// event streaming applications where some eventual consistency is acceptable.
-    pub fn async_processing() -> Self {
-        Self {
-            connection: ConnectionConfig::default(),
-            backpressure: BackpressureConfig {
-                permits: 5000,
-                strategy: BackpressureStrategy::Async,
-            },
-            enable_metrics: false,
-        }
-    }
 }

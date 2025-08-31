@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::impl_unified_event;
 use crate::streaming::event_parser::common::{types::EventType, EventMetadata};
 use borsh::BorshDeserialize;
@@ -20,8 +22,7 @@ impl BlockMetaEvent {
         program_received_time_us: i64,
     ) -> Self {
         let metadata = EventMetadata::new(
-            format!("block_{}_{}", slot, block_hash),
-            "".to_string(),
+            Cow::Borrowed(""),
             slot,
             block_time_ms / 1000,
             block_time_ms,

@@ -118,8 +118,6 @@ impl BonkEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = bonk_pool_create_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(metadata.signature.to_string());
             Some(Box::new(BonkPoolCreateEvent { metadata, ..event }))
         } else {
             None
@@ -132,8 +130,6 @@ impl BonkEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = bonk_trade_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!("{}-{}", metadata.signature, event.pool_state));
             if metadata.event_type == EventType::BonkBuyExactIn
                 || metadata.event_type == EventType::BonkBuyExactOut
             {
@@ -165,9 +161,6 @@ impl BonkEventParser {
         let amount_in = read_u64_le(data, 0)?;
         let minimum_amount_out = read_u64_le(data, 8)?;
         let share_fee_rate = read_u64_le(data, 16)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}", metadata.signature, accounts[4]));
 
         Some(Box::new(BonkTradeEvent {
             metadata,
@@ -207,9 +200,6 @@ impl BonkEventParser {
         let maximum_amount_in = read_u64_le(data, 8)?;
         let share_fee_rate = read_u64_le(data, 16)?;
 
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}", metadata.signature, accounts[4]));
-
         Some(Box::new(BonkTradeEvent {
             metadata,
             amount_out,
@@ -248,9 +238,6 @@ impl BonkEventParser {
         let minimum_amount_out = read_u64_le(data, 8)?;
         let share_fee_rate = read_u64_le(data, 16)?;
 
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}", metadata.signature, accounts[4]));
-
         Some(Box::new(BonkTradeEvent {
             metadata,
             amount_in,
@@ -288,9 +275,6 @@ impl BonkEventParser {
         let amount_out = read_u64_le(data, 0)?;
         let maximum_amount_in = read_u64_le(data, 8)?;
         let share_fee_rate = read_u64_le(data, 16)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}", metadata.signature, accounts[4]));
 
         Some(Box::new(BonkTradeEvent {
             metadata,
@@ -332,9 +316,6 @@ impl BonkEventParser {
         let curve_param = Self::parse_curve_params(data, &mut offset)?;
         let vesting_param = Self::parse_vesting_params(data, &mut offset)?;
 
-        let mut metadata = metadata;
-        metadata.set_id(metadata.signature.to_string());
-
         Some(Box::new(BonkPoolCreateEvent {
             metadata,
             payer: accounts[0],
@@ -368,9 +349,6 @@ impl BonkEventParser {
         let curve_param = Self::parse_curve_params(data, &mut offset)?;
         let vesting_param = Self::parse_vesting_params(data, &mut offset)?;
         let amm_fee_on = data[offset];
-
-        let mut metadata = metadata;
-        metadata.set_id(metadata.signature.to_string());
 
         Some(Box::new(BonkPoolCreateEvent {
             metadata,
@@ -514,9 +492,6 @@ impl BonkEventParser {
         let quote_lot_size = u64::from_le_bytes(data[8..16].try_into().unwrap());
         let market_vault_signer_nonce = data[16];
 
-        let mut metadata = metadata;
-        metadata.set_id(metadata.signature.to_string());
-
         Some(Box::new(BonkMigrateToAmmEvent {
             metadata,
             base_lot_size,
@@ -564,9 +539,6 @@ impl BonkEventParser {
         accounts: &[Pubkey],
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
-        let mut metadata = metadata;
-        metadata.set_id(metadata.signature.to_string());
-
         Some(Box::new(BonkMigrateToCpswapEvent {
             metadata,
             payer: accounts[0],

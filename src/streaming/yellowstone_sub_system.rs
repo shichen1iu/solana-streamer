@@ -64,17 +64,14 @@ impl YellowstoneGrpc {
                             Some(UpdateOneof::Transaction(sut)) => {
                                 let transaction_pretty = TransactionPretty::from((sut, created_at));
                                 let event_pretty = EventPretty::Transaction(transaction_pretty);
-                                let callback_clone = callback.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) = Self::process_system_transaction(
-                                        event_pretty,
-                                        &*callback_clone,
-                                    )
-                                    .await
-                                    {
-                                        error!("Error processing transaction: {e:?}");
-                                    }
-                                });
+                                if let Err(e) = Self::process_system_transaction(
+                                    event_pretty,
+                                    &*callback,
+                                )
+                                .await
+                                {
+                                    error!("Error processing transaction: {e:?}");
+                                }
                             }
                             Some(UpdateOneof::Ping(_)) => {
                                 let _ = subscribe_tx

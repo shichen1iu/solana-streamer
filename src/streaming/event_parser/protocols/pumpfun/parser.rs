@@ -81,8 +81,6 @@ impl PumpFunEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = pumpfun_migrate_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!("{}-{}-{}", metadata.signature, event.user, event.mint));
             Some(Box::new(PumpFunMigrateEvent { metadata, ..event }))
         } else {
             None
@@ -95,11 +93,6 @@ impl PumpFunEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = pumpfun_create_token_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!(
-                "{}-{}-{}-{}",
-                metadata.signature, event.name, event.symbol, event.mint
-            ));
             Some(Box::new(PumpFunCreateTokenEvent { metadata, ..event }))
         } else {
             None
@@ -112,11 +105,6 @@ impl PumpFunEventParser {
         metadata: EventMetadata,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(event) = pumpfun_trade_event_log_decode(data) {
-            let mut metadata = metadata;
-            metadata.set_id(format!(
-                "{}-{}-{}-{}",
-                metadata.signature, event.mint, event.user, event.is_buy
-            ));
             Some(Box::new(PumpFunTradeEvent { metadata, ..event }))
         } else {
             None
@@ -151,9 +139,6 @@ impl PumpFunEventParser {
             Pubkey::default()
         };
 
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}-{}", metadata.signature, name, symbol, accounts[0]));
-
         Some(Box::new(PumpFunCreateTokenEvent {
             metadata,
             name: name.to_string(),
@@ -180,8 +165,6 @@ impl PumpFunEventParser {
         }
         let amount = u64::from_le_bytes(data[0..8].try_into().unwrap());
         let max_sol_cost = u64::from_le_bytes(data[8..16].try_into().unwrap());
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}-{}", metadata.signature, accounts[2], accounts[6], true));
         Some(Box::new(PumpFunTradeEvent {
             metadata,
             global: accounts[0],
@@ -216,9 +199,6 @@ impl PumpFunEventParser {
         }
         let amount = u64::from_le_bytes(data[0..8].try_into().unwrap());
         let min_sol_output = u64::from_le_bytes(data[8..16].try_into().unwrap());
-        let mut metadata = metadata;
-        metadata
-            .set_id(format!("{}-{}-{}-{}", metadata.signature, accounts[2], accounts[6], false));
         Some(Box::new(PumpFunTradeEvent {
             metadata,
             global: accounts[0],
@@ -251,8 +231,6 @@ impl PumpFunEventParser {
         if accounts.len() < 24 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[5], accounts[2]));
         Some(Box::new(PumpFunMigrateEvent {
             metadata,
             global: accounts[0],

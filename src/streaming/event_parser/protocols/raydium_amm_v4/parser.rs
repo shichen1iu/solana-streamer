@@ -102,12 +102,6 @@ impl RaydiumAmmV4EventParser {
             return None;
         }
 
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
-
         Some(Box::new(RaydiumAmmV4WithdrawPnlEvent {
             metadata,
             token_program: accounts[0],
@@ -140,12 +134,6 @@ impl RaydiumAmmV4EventParser {
             return None;
         }
         let amount = read_u64_le(data, 0)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
 
         Some(Box::new(RaydiumAmmV4WithdrawEvent {
             metadata,
@@ -189,12 +177,6 @@ impl RaydiumAmmV4EventParser {
         let open_time = read_u64_le(data, 1)?;
         let init_pc_amount = read_u64_le(data, 9)?;
         let init_coin_amount = read_u64_le(data, 17)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
 
         Some(Box::new(RaydiumAmmV4Initialize2Event {
             metadata,
@@ -240,12 +222,6 @@ impl RaydiumAmmV4EventParser {
         let max_pc_amount = read_u64_le(data, 8)?;
         let base_side = read_u64_le(data, 16)?;
 
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
-
         Some(Box::new(RaydiumAmmV4DepositEvent {
             metadata,
             max_coin_amount,
@@ -280,12 +256,6 @@ impl RaydiumAmmV4EventParser {
         }
         let max_amount_in = read_u64_le(data, 0)?;
         let amount_out = read_u64_le(data, 8)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
 
         let mut accounts = accounts.to_vec();
         if accounts.len() == 17 {
@@ -333,12 +303,6 @@ impl RaydiumAmmV4EventParser {
         }
         let amount_in = read_u64_le(data, 0)?;
         let minimum_amount_out = read_u64_le(data, 8)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
 
         let mut accounts = accounts.to_vec();
         if accounts.len() == 17 {

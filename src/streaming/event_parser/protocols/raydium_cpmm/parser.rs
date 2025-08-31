@@ -92,8 +92,6 @@ impl RaydiumCpmmEventParser {
         if data.len() < 24 || accounts.len() < 14 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumCpmmWithdrawEvent {
             metadata,
             lp_token_amount: read_u64_le(data, 0)?,
@@ -125,8 +123,6 @@ impl RaydiumCpmmEventParser {
         if data.len() < 24 || accounts.len() < 20 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumCpmmInitializeEvent {
             metadata,
             init_amount0: read_u64_le(data, 0)?,
@@ -164,8 +160,6 @@ impl RaydiumCpmmEventParser {
         if data.len() < 24 || accounts.len() < 13 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumCpmmDepositEvent {
             metadata,
             lp_token_amount: read_u64_le(data, 0)?,
@@ -200,12 +194,6 @@ impl RaydiumCpmmEventParser {
         let amount_in = read_u64_le(data, 0)?;
         let minimum_amount_out = read_u64_le(data, 8)?;
 
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
-
         Some(Box::new(RaydiumCpmmSwapEvent {
             metadata,
             amount_in,
@@ -238,12 +226,6 @@ impl RaydiumCpmmEventParser {
 
         let max_amount_in = read_u64_le(data, 0)?;
         let amount_out = read_u64_le(data, 8)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[3], accounts[10], accounts[11]
-        ));
 
         Some(Box::new(RaydiumCpmmSwapEvent {
             metadata,

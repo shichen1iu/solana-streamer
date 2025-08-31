@@ -1,11 +1,13 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use solana_sdk::pubkey::Pubkey;
 
+use crate::streaming::common::SimdUtils;
 use crate::streaming::event_parser::common::filter::EventTypeFilter;
 use crate::streaming::event_parser::common::{EventMetadata, EventType, ProtocolType};
-use crate::streaming::event_parser::core::traits::UnifiedEvent;
+use crate::streaming::event_parser::core::traits::{UnifiedEvent, get_high_perf_clock};
 use crate::streaming::event_parser::protocols::bonk::parser::BONK_PROGRAM_ID;
 use crate::streaming::event_parser::protocols::pumpfun::parser::PUMPFUN_PROGRAM_ID;
 use crate::streaming::event_parser::protocols::pumpswap::parser::PUMPSWAP_PROGRAM_ID;
@@ -35,7 +37,10 @@ static PROTOCOL_CONFIGS_CACHE: OnceLock<HashMap<Protocol, Vec<AccountEventParseC
 pub struct AccountEventParser {}
 
 impl AccountEventParser {
-    pub fn configs(protocols: Vec<Protocol>, event_type_filter: Option<EventTypeFilter>) -> Vec<AccountEventParseConfig> {
+    pub fn configs(
+        protocols: &[Protocol],
+        event_type_filter: Option<&EventTypeFilter>,
+    ) -> Vec<AccountEventParseConfig> {
         let protocols_map = PROTOCOL_CONFIGS_CACHE.get_or_init(|| {
             let mut map: HashMap<Protocol, Vec<AccountEventParseConfig>> = HashMap::new();
             map.insert(Protocol::PumpSwap, vec![
@@ -145,32 +150,39 @@ impl AccountEventParser {
         });
 
         let mut configs = vec![];
+        let empty_vec = vec![];
         for protocol in protocols {
-            let protocol_configs = protocols_map.get(&protocol).unwrap_or(&vec![]).clone();
-            let filtered_configs: Vec<AccountEventParseConfig> = protocol_configs.into_iter().filter(|config| {
-                event_type_filter.as_ref().map(|filter| filter.include.contains(&config.event_type)).unwrap_or(true)
-            }).collect();
+            let protocol_configs = protocols_map.get(protocol).unwrap_or(&empty_vec);
+            let filtered_configs: Vec<AccountEventParseConfig> = protocol_configs
+                .iter()
+                .filter(|config| {
+                    event_type_filter
+                        .map(|filter| filter.include.contains(&config.event_type))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect();
             configs.extend(filtered_configs);
         }
         configs
     }
 
     pub fn parse_account_event(
-        protocols: Vec<Protocol>,
+        protocols: &[Protocol],
         account: AccountPretty,
-        event_type_filter: Option<EventTypeFilter>,
+        event_type_filter: Option<&EventTypeFilter>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         let configs = Self::configs(protocols, event_type_filter);
         for config in configs {
             if account.owner == config.program_id
-                && account.data[..config.account_discriminator.len()]
-                    == *config.account_discriminator
+                && SimdUtils::fast_discriminator_match(&account.data, config.account_discriminator)
             {
+                let signature_str = Cow::Owned(account.signature.to_string());
                 let event = (config.account_parser)(
                     &account,
                     EventMetadata {
                         slot: account.slot,
-                        signature: account.signature.to_string(),
+                        signature: signature_str,
                         protocol: config.protocol_type,
                         event_type: config.event_type,
                         program_id: config.program_id,
@@ -180,7 +192,7 @@ impl AccountEventParser {
                 );
                 if let Some(mut event) = event {
                     event.set_program_handle_time_consuming_us(
-                        chrono::Utc::now().timestamp_micros() - account.program_received_time_us,
+                        get_high_perf_clock().elapsed_micros_since(account.program_received_time_us),
                     );
                     return Some(event);
                 }

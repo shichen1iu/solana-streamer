@@ -59,14 +59,6 @@ impl ShredStreamGrpc {
         Self::new_with_config(endpoint, StreamClientConfig::low_latency()).await
     }
 
-    /// Creates a new ShredStreamClient with asynchronous processing configuration.
-    ///
-    /// This is a convenience method that creates a client optimized for high-volume scenarios
-    /// with balanced throughput and reliability. See `StreamClientConfig::async_processing()`
-    /// for detailed configuration information.
-    pub async fn new_async_processing(endpoint: String) -> AnyResult<Self> {
-        Self::new_with_config(endpoint, StreamClientConfig::async_processing()).await
-    }
 
     /// 获取当前配置
     pub fn get_config(&self) -> &StreamClientConfig {

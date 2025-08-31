@@ -5,10 +5,6 @@ use solana_streamer_sdk::streaming::event_parser::UnifiedEvent;
 use solana_streamer_sdk::streaming::event_parser::{
     protocols::MutilEventParser, EventParser, Protocol,
 };
-use solana_transaction_status::{InnerInstruction, InnerInstructions, UiInstruction};
-
-use solana_sdk::bs58;
-use solana_sdk::instruction::CompiledInstruction;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -16,7 +12,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<()> {
     let signatures = vec![
-        "4PsHYajH87x2zJPEGZczZtd2ksibuMCFPonC24jk5mTGZ46hzvjpzM5UZuLz9sRv79MkCBbtDqwJapGPTSkCFKoL",
+        "5sDWrTTkE69CNc6nrAX7SqPS7FiajJTg8TMog3Gve7KjVfrqYn8YZcX1kAoyKok976S4RTnK1EdCV8hRiDWg68Aj",
     ];
     // Validate signature format
     let mut valid_signatures = Vec::new();
@@ -118,6 +114,9 @@ async fn get_single_transaction_details(signature_str: &str) -> Result<()> {
             println!("Failed to get transaction: {}", e);
         }
     }
+
+    println!("Press Ctrl+C to exit example...");
+    tokio::signal::ctrl_c().await?;
 
     Ok(())
 }

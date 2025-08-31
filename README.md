@@ -24,8 +24,8 @@ A lightweight Rust library for real-time event streaming from Solana DEX trading
 11. **Performance Monitoring**: Built-in performance metrics monitoring, including event processing speed, etc.
 12. **Memory Optimization**: Object pooling and caching mechanisms to reduce memory allocations
 13. **Flexible Configuration System**: Support for custom batch sizes, backpressure strategies, channel sizes, and other parameters
-14. **Preset Configurations**: Provides high-throughput, low-latency, and async processing preset configurations optimized for different use cases
-15. **Backpressure Handling**: Supports blocking, dropping, retrying, ordered, and other backpressure strategies
+14. **Preset Configurations**: Provides high-throughput and low-latency preset configurations optimized for different use cases
+15. **Backpressure Handling**: Supports blocking and dropping backpressure strategies
 16. **Runtime Configuration Updates**: Supports dynamic configuration parameter updates at runtime
 17. **Full Function Performance Monitoring**: All subscribe_events functions support performance monitoring, automatically collecting and reporting performance metrics
 18. **Graceful Shutdown**: Support for programmatic stop() method for clean shutdown
@@ -91,26 +91,10 @@ let shred = ShredStreamGrpc::new_low_latency(endpoint).await?;
 
 **Features:**
 - **Backpressure Strategy**: Block - ensures no data loss
-- **Buffer Size**: 1 permit to minimize memory usage
+- **Buffer Size**: 4000 permits for balanced throughput and latency
 - **Immediate Processing**: No buffering, processes events immediately
 - **Use Case**: Scenarios where every millisecond counts and you cannot afford to lose any events, such as trading applications or real-time monitoring
 
-#### 3. Async Processing Configuration (`async_processing()`)
-
-Balances throughput and reliability:
-
-```rust
-let config = StreamClientConfig::async_processing();
-// Or use convenience methods
-let grpc = YellowstoneGrpc::new_async_processing(endpoint, token)?;
-let shred = ShredStreamGrpc::new_async_processing(endpoint).await?;
-```
-
-**Features:**
-- **Backpressure Strategy**: Async - non-blocking operation
-- **Buffer Size**: 5,000 permits for steady flow
-- **Fire-and-forget**: Async processing semantics
-- **Use Case**: Scenarios where you need sustained high throughput with eventual consistency, such as data ingestion pipelines or event streaming applications
 
 ### Custom Configuration
 
@@ -130,16 +114,6 @@ let config = StreamClientConfig {
     enable_metrics: true,
 };
 ```
-
-### Configuration Selection Guide
-
-| Scenario | Recommended Config | Reason |
-|----------|-------------------|---------|
-| Trading Bots | `low_latency()` | Need fastest response time, cannot lose trading signals |
-| Data Analytics | `high_throughput()` | Need to process large amounts of historical data, can tolerate some data loss |
-| Event Stream Processing | `async_processing()` | Balance performance and reliability, suitable for continuous processing |
-| Real-time Monitoring | `low_latency()` | Need immediate response to anomalies |
-| Bulk Data Ingestion | `high_throughput()` | Prioritize overall throughput |
 
 ## Usage Examples
 

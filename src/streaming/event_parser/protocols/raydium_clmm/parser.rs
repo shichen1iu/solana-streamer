@@ -124,8 +124,6 @@ impl RaydiumClmmEventParser {
         if data.len() < 51 || accounts.len() < 22 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumClmmOpenPositionV2Event {
             metadata,
             tick_lower_index: read_i32_le(data, 0)?,
@@ -172,8 +170,6 @@ impl RaydiumClmmEventParser {
         if data.len() < 51 || accounts.len() < 20 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumClmmOpenPositionWithToken22NftEvent {
             metadata,
             tick_lower_index: read_i32_le(data, 0)?,
@@ -217,8 +213,6 @@ impl RaydiumClmmEventParser {
         if data.len() < 34 || accounts.len() < 15 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumClmmIncreaseLiquidityV2Event {
             metadata,
             liquidity: read_u128_le(data, 0)?,
@@ -252,8 +246,6 @@ impl RaydiumClmmEventParser {
         if data.len() < 24 || accounts.len() < 13 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumClmmCreatePoolEvent {
             metadata,
             sqrt_price_x64: read_u128_le(data, 0)?,
@@ -283,8 +275,6 @@ impl RaydiumClmmEventParser {
         if data.len() < 32 || accounts.len() < 16 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumClmmDecreaseLiquidityV2Event {
             metadata,
             liquidity: read_u128_le(data, 0)?,
@@ -319,8 +309,6 @@ impl RaydiumClmmEventParser {
         if accounts.len() < 6 {
             return None;
         }
-        let mut metadata = metadata;
-        metadata.set_id(format!("{}-{}-{}", metadata.signature, accounts[0], accounts[1]));
         Some(Box::new(RaydiumClmmClosePositionEvent {
             metadata,
             nft_owner: accounts[0],
@@ -346,12 +334,6 @@ impl RaydiumClmmEventParser {
         let other_amount_threshold = read_u64_le(data, 8)?;
         let sqrt_price_limit_x64 = read_u128_le(data, 16)?;
         let is_base_input = read_u8_le(data, 32)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[2], accounts[3], accounts[4]
-        ));
 
         Some(Box::new(RaydiumClmmSwapEvent {
             metadata,
@@ -386,12 +368,6 @@ impl RaydiumClmmEventParser {
         let other_amount_threshold = read_u64_le(data, 8)?;
         let sqrt_price_limit_x64 = read_u128_le(data, 16)?;
         let is_base_input = read_u8_le(data, 32)?;
-
-        let mut metadata = metadata;
-        metadata.set_id(format!(
-            "{}-{}-{}-{}",
-            metadata.signature, accounts[2], accounts[3], accounts[4]
-        ));
 
         Some(Box::new(RaydiumClmmSwapV2Event {
             metadata,

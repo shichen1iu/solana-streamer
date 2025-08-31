@@ -62,19 +62,16 @@ impl ShredStreamGrpc {
                                         msg.slot,
                                         chrono::Utc::now().timestamp_micros(),
                                     );
-                                    // 异步执行，不阻塞主流，使用带背压控制的方法
-                                    let processor_clone = event_processor_clone.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) = processor_clone
-                                            .process_shred_transaction_with_metrics(
-                                                transaction_with_slot,
-                                                bot_wallet,
-                                            )
-                                            .await
-                                        {
-                                            error!("Error handling message: {e:?}");
-                                        }
-                                    });
+                                    // 直接处理，背压控制在 EventProcessor 内部处理
+                                    if let Err(e) = event_processor_clone
+                                        .process_shred_transaction_with_metrics(
+                                            transaction_with_slot,
+                                            bot_wallet,
+                                        )
+                                        .await
+                                    {
+                                        error!("Error handling message: {e:?}");
+                                    }
                                 }
                             }
                         }

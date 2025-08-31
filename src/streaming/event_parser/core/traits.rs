@@ -8,33 +8,141 @@ use solana_transaction_status::{
     EncodedConfirmedTransactionWithStatusMeta, InnerInstruction, InnerInstructions,
     TransactionWithStatusMeta, UiInstruction,
 };
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Instant;
 
-use super::global_state::{add_dev_address, is_dev_address, update_slot};
-
-use crate::streaming::event_parser::common::{parse_swap_data_from_next_instructions, SwapData};
-use crate::streaming::event_parser::core::global_state::{
-    add_bonk_dev_address, is_bonk_dev_address,
+use super::global_state::{
+    add_bonk_dev_address, add_dev_address, is_bonk_dev_address, is_dev_address,
 };
+
+use crate::streaming::common::simd_utils::SimdUtils;
+use crate::streaming::event_parser::common::{parse_swap_data_from_next_instructions, SwapData};
 use crate::streaming::event_parser::protocols::pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent};
 use crate::streaming::event_parser::{
-    common::{utils::*, EventMetadata, EventType, ProtocolType},
+    common::{EventMetadata, EventType, ProtocolType},
     protocols::{
         bonk::{BonkPoolCreateEvent, BonkTradeEvent},
         pumpfun::{PumpFunCreateTokenEvent, PumpFunTradeEvent},
     },
 };
 
+/// 高性能时钟管理器，减少系统调用开销
+#[derive(Debug)]
+pub struct HighPerformanceClock {
+    /// 基准时间点（程序启动时的单调时钟时间）
+    base_instant: Instant,
+    /// 基准时间点对应的UTC时间戳（微秒）
+    base_timestamp_us: i64,
+}
+
+impl HighPerformanceClock {
+    /// 创建新的高性能时钟
+    pub fn new() -> Self {
+        let base_instant = Instant::now();
+        let base_timestamp_us = chrono::Utc::now().timestamp_micros();
+
+        Self { base_instant, base_timestamp_us }
+    }
+
+    /// 获取当前时间戳（微秒），使用单调时钟计算，避免系统调用
+    #[inline(always)]
+    pub fn now_micros(&self) -> i64 {
+        let elapsed = self.base_instant.elapsed();
+        self.base_timestamp_us + elapsed.as_micros() as i64
+    }
+
+    /// 计算从指定时间戳到现在的消耗时间（微秒）
+    #[inline(always)]
+    pub fn elapsed_micros_since(&self, start_timestamp_us: i64) -> i64 {
+        self.now_micros() - start_timestamp_us
+    }
+}
+
+impl Default for HighPerformanceClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 全局高性能时钟实例（使用OnceCell避免重复初始化）
+static HIGH_PERF_CLOCK: once_cell::sync::OnceCell<HighPerformanceClock> =
+    once_cell::sync::OnceCell::new();
+
+/// 获取全局高性能时钟实例
+#[inline(always)]
+pub fn get_high_perf_clock() -> &'static HighPerformanceClock {
+    HIGH_PERF_CLOCK.get_or_init(HighPerformanceClock::new)
+}
+
+/// 轻量级事件包装器，避免频繁的Box分配
+#[derive(Debug)]
+pub struct EventWrapper<T: UnifiedEvent> {
+    pub event: T,
+}
+
+impl<T: UnifiedEvent + 'static> EventWrapper<T> {
+    #[inline]
+    pub fn new(event: T) -> Self {
+        Self { event }
+    }
+
+    #[inline]
+    pub fn into_boxed(self) -> Box<dyn UnifiedEvent> {
+        Box::new(self.event)
+    }
+}
+
+/// 高性能账户公钥缓存，避免重复Vec分配
+#[derive(Debug)]
+pub struct AccountPubkeyCache {
+    /// 预分配的账户公钥向量，避免每次重新分配
+    cache: Vec<Pubkey>,
+}
+
+impl AccountPubkeyCache {
+    /// 创建新的账户公钥缓存
+    pub fn new() -> Self {
+        Self {
+            cache: Vec::with_capacity(32), // 预分配32个位置，覆盖大多数交易
+        }
+    }
+
+    /// 从指令账户索引构建账户公钥向量，重用缓存内存
+    #[inline]
+    pub fn build_account_pubkeys(
+        &mut self,
+        instruction_accounts: &[u8],
+        all_accounts: &[Pubkey],
+    ) -> &[Pubkey] {
+        self.cache.clear();
+
+        // 确保容量足够，避免动态扩容
+        if self.cache.capacity() < instruction_accounts.len() {
+            self.cache.reserve(instruction_accounts.len() - self.cache.capacity());
+        }
+
+        // 快速填充账户公钥
+        for &idx in instruction_accounts.iter() {
+            if (idx as usize) < all_accounts.len() {
+                self.cache.push(all_accounts[idx as usize]);
+            }
+        }
+
+        &self.cache
+    }
+}
+
+impl Default for AccountPubkeyCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Unified Event Interface - All protocol events must implement this trait
 pub trait UnifiedEvent: Debug + Send + Sync {
-    /// Get event ID
-    fn id(&self) -> &str;
-
-    /// Set event ID
-    fn clear_id(&mut self);
-
     /// Get event type
     fn event_type(&self) -> EventType;
 
@@ -69,6 +177,9 @@ pub trait UnifiedEvent: Debug + Send + Sync {
 
     /// Set swap data
     fn set_swap_data(&mut self, swap_data: SwapData);
+
+    /// swap_data is parsed
+    fn swap_data_is_parsed(&self) -> bool;
 
     /// Get index
     fn instruction_outer_index(&self) -> i64;
@@ -343,7 +454,6 @@ pub trait EventParser: Send + Sync {
         let versioned_tx = match transaction.transaction.transaction.decode() {
             Some(tx) => tx,
             None => {
-                println!("Failed to decode transaction");
                 return Ok(());
             }
         };
@@ -363,6 +473,7 @@ pub trait EventParser: Send + Sync {
                         if let UiInstruction::Compiled(ui_compiled) = ui_instruction {
                             // 解码base58编码的data
                             if let Ok(data) = bs58::decode(&ui_compiled.data).into_vec() {
+                                // base64解码
                                 let compiled_instruction = CompiledInstruction {
                                     program_id_index: ui_compiled.program_id_index,
                                     accounts: ui_compiled.accounts.clone(),
@@ -565,6 +676,8 @@ pub struct GenericEventParser {
     pub program_ids: Vec<Pubkey>,
     // pub inner_instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
     pub instruction_configs: HashMap<Vec<u8>, Vec<GenericEventParseConfig>>,
+    /// 账户公钥缓存，避免重复分配
+    pub account_cache: parking_lot::Mutex<AccountPubkeyCache>,
 }
 
 impl GenericEventParser {
@@ -580,7 +693,10 @@ impl GenericEventParser {
                 .push(config.clone());
         }
 
-        Self { program_ids, instruction_configs }
+        // 初始化账户缓存
+        let account_cache = parking_lot::Mutex::new(AccountPubkeyCache::new());
+
+        Self { program_ids, instruction_configs, account_cache }
     }
 
     /// 通用的内联指令解析方法
@@ -598,11 +714,11 @@ impl GenericEventParser {
         transaction_index: Option<u64>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(parser) = config.inner_instruction_parser {
+            let signature_str = Cow::Owned(signature.to_string());
             let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
             let block_time_ms = timestamp.seconds * 1000 + (timestamp.nanos as i64) / 1_000_000;
             let metadata = EventMetadata::new(
-                signature.to_string(),
-                signature.to_string(),
+                signature_str,
                 slot,
                 timestamp.seconds,
                 block_time_ms,
@@ -636,11 +752,11 @@ impl GenericEventParser {
         transaction_index: Option<u64>,
     ) -> Option<Box<dyn UnifiedEvent>> {
         if let Some(parser) = config.instruction_parser {
+            let signature_str = Cow::Owned(signature.to_string());
             let timestamp = block_time.unwrap_or(Timestamp { seconds: 0, nanos: 0 });
             let block_time_ms = timestamp.seconds * 1000 + (timestamp.nanos as i64) / 1_000_000;
             let metadata = EventMetadata::new(
-                signature.to_string(),
-                signature.to_string(),
+                signature_str,
                 slot,
                 timestamp.seconds,
                 block_time_ms,
@@ -678,7 +794,8 @@ impl EventParser for GenericEventParser {
         transaction_index: Option<u64>,
         config: &GenericEventParseConfig,
     ) -> Vec<Box<dyn UnifiedEvent>> {
-        if inner_instruction.data.len() < 16 {
+        // Use SIMD-optimized data validation
+        if !SimdUtils::validate_instruction_data_simd(&inner_instruction.data, 16, 0) {
             return Vec::new();
         }
         let data = &inner_instruction.data[16..];
@@ -720,80 +837,115 @@ impl EventParser for GenericEventParser {
         if !self.should_handle(&program_id) {
             return Ok(());
         }
-        for (disc, configs) in &self.instruction_configs {
-            if instruction.data.len() < disc.len() {
-                continue;
-            }
-            let discriminator = &instruction.data[..disc.len()];
-            let data = &instruction.data[disc.len()..];
-            if discriminator == disc {
-                // 验证账户索引
-                if !validate_account_indices(&instruction.accounts, accounts.len()) {
-                    continue;
-                }
-                let account_pubkeys: Vec<Pubkey> =
-                    instruction.accounts.iter().map(|&idx| accounts[idx as usize]).collect();
-                for config in configs {
-                    if config.program_id != program_id {
-                        continue;
-                    }
-                    if let Some(mut event) = self.parse_instruction_event(
-                        config,
-                        data,
-                        &account_pubkeys,
-                        signature,
-                        slot,
-                        block_time,
-                        program_received_time_us,
-                        outer_index,
-                        inner_index,
-                        transaction_index,
-                    ) {
-                        let mut inner_instruction_event: Option<Box<dyn UnifiedEvent>> = None;
-                        if inner_instructions.is_some() {
-                            // 解析对应的内部 log 执行
-                            for inner_instruction in inner_instructions.unwrap().instructions.iter()
-                            {
-                                let result = self.parse_events_from_inner_instruction(
-                                    &inner_instruction.instruction,
-                                    signature,
-                                    slot,
-                                    block_time,
-                                    program_received_time_us,
-                                    outer_index,
-                                    inner_index,
-                                    transaction_index,
-                                    config,
-                                );
-                                if result.len() > 0 {
-                                    inner_instruction_event = Some(result[0].clone());
-                                }
-                                // 解析swap数据
-                                let swap_data = parse_swap_data_from_next_instructions(
-                                    &*event,
-                                    inner_instructions.unwrap(),
-                                    inner_index.unwrap_or(-1_i64) as i8,
-                                    &accounts,
-                                );
-                                if let Some(swap_data) = swap_data {
-                                    event.set_swap_data(swap_data);
-                                }
+        // 一维化并行处理：将所有 (discriminator, config) 组合展开并行处理
+        let all_processing_params: Vec<_> = self
+            .instruction_configs
+            .iter()
+            .filter(|(disc, _)| {
+                // Use SIMD-optimized data validation and discriminator matching
+                SimdUtils::validate_instruction_data_simd(&instruction.data, disc.len(), disc.len())
+                    && SimdUtils::fast_discriminator_match(&instruction.data, disc)
+            })
+            .flat_map(|(disc, configs)| {
+                configs
+                    .iter()
+                    .filter(|config| config.program_id == program_id)
+                    .map(move |config| (disc, config))
+            })
+            .collect();
+
+        // Use SIMD-optimized account indices validation (只需检查一次)
+        if !SimdUtils::validate_account_indices_simd(&instruction.accounts, accounts.len()) {
+            return Ok(());
+        }
+
+        // 使用缓存构建账户公钥列表，避免重复分配 (只需构建一次)
+        let account_pubkeys = {
+            let mut cache_guard = self.account_cache.lock();
+            cache_guard.build_account_pubkeys(&instruction.accounts, accounts).to_vec()
+        };
+
+        // 并行处理所有 (discriminator, config) 组合
+        let all_results: Vec<_> = all_processing_params
+            .iter()
+            .filter_map(|(disc, config)| {
+                let data = &instruction.data[disc.len()..];
+                self.parse_instruction_event(
+                    config,
+                    data,
+                    &account_pubkeys,
+                    signature,
+                    slot,
+                    block_time,
+                    program_received_time_us,
+                    outer_index,
+                    inner_index,
+                    transaction_index,
+                )
+                .map(|event| ((*disc).clone(), (*config).clone(), event))
+            })
+            .collect();
+
+        for (_disc, config, mut event) in all_results {
+            // 阻塞处理：原有的同步逻辑
+            let mut inner_instruction_event: Option<Box<dyn UnifiedEvent>> = None;
+            if inner_instructions.is_some() {
+                let inner_instructions_ref = inner_instructions.unwrap();
+
+                // 并行执行两个任务
+                let (inner_event_result, swap_data_result) = std::thread::scope(|s| {
+                    let inner_event_handle = s.spawn(|| {
+                        for inner_instruction in inner_instructions_ref.instructions.iter() {
+                            let result = self.parse_events_from_inner_instruction(
+                                &inner_instruction.instruction,
+                                signature,
+                                slot,
+                                block_time,
+                                program_received_time_us,
+                                outer_index,
+                                inner_index,
+                                transaction_index,
+                                &config,
+                            );
+                            if result.len() > 0 {
+                                return Some(result[0].clone());
                             }
                         }
-                        // 合并事件
-                        if let Some(inner_instruction_event) = inner_instruction_event {
-                            event.merge(&*inner_instruction_event);
+                        None
+                    });
+
+                    let swap_data_handle = s.spawn(|| {
+                        if !event.swap_data_is_parsed() {
+                            parse_swap_data_from_next_instructions(
+                                &*event,
+                                inner_instructions_ref,
+                                inner_index.unwrap_or(-1_i64) as i8,
+                                &accounts,
+                            )
+                        } else {
+                            None
                         }
-                        // 设置处理时间
-                        event.set_program_handle_time_consuming_us(
-                            chrono::Utc::now().timestamp_micros() - program_received_time_us,
-                        );
-                        event = process_event(event, bot_wallet);
-                        callback(&event);
-                        break;
-                    }
+                    });
+
+                    // 等待两个任务完成
+                    (inner_event_handle.join().unwrap(), swap_data_handle.join().unwrap())
+                });
+
+                inner_instruction_event = inner_event_result;
+                if let Some(swap_data) = swap_data_result {
+                    event.set_swap_data(swap_data);
                 }
             }
+            // 合并事件
+            if let Some(inner_instruction_event) = inner_instruction_event {
+                event.merge(&*inner_instruction_event);
+            }
+            // 设置处理时间（使用高性能时钟）
+            event.set_program_handle_time_consuming_us(
+                get_high_perf_clock().elapsed_micros_since(program_received_time_us),
+            );
+            event = process_event(event, bot_wallet);
+            callback(&event);
         }
         Ok(())
     }
@@ -811,11 +963,11 @@ fn process_event(
     mut event: Box<dyn UnifiedEvent>,
     bot_wallet: Option<Pubkey>,
 ) -> Box<dyn UnifiedEvent> {
-    update_slot(event.slot());
+    let slot = event.slot();
     if let Some(token_info) = event.as_any().downcast_ref::<PumpFunCreateTokenEvent>() {
-        add_dev_address(token_info.user);
+        add_dev_address(slot, token_info.user);
         if token_info.creator != Pubkey::default() && token_info.creator != token_info.user {
-            add_dev_address(token_info.creator);
+            add_dev_address(slot, token_info.creator);
         }
     } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<PumpFunTradeEvent>() {
         if is_dev_address(&trade_info.user) || is_dev_address(&trade_info.creator) {
@@ -844,7 +996,7 @@ fn process_event(
                 trade_info.user_quote_amount_out;
         }
     } else if let Some(pool_info) = event.as_any().downcast_ref::<BonkPoolCreateEvent>() {
-        add_bonk_dev_address(pool_info.creator);
+        add_bonk_dev_address(slot, pool_info.creator);
     } else if let Some(trade_info) = event.as_any_mut().downcast_mut::<BonkTradeEvent>() {
         if is_bonk_dev_address(&trade_info.payer) {
             trade_info.is_dev_create_token_trade = true;
@@ -854,6 +1006,5 @@ fn process_event(
             trade_info.is_dev_create_token_trade = false;
         }
     }
-    event.clear_id();
     event
 }

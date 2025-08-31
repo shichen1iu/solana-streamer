@@ -2,26 +2,23 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crossbeam_queue::ArrayQueue;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
-use solana_transaction_status::{InnerInstruction, UiInstruction};
-use std::{
-    fmt,
-    hash::{DefaultHasher, Hash, Hasher},
-    str::FromStr,
-    sync::Arc,
-};
+use std::{borrow::Cow, fmt, str::FromStr, sync::Arc};
 
 use crate::{
     match_event,
-    streaming::event_parser::{
-        protocols::{
-            bonk::BonkTradeEvent,
-            pumpfun::PumpFunTradeEvent,
-            pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent},
-            raydium_amm_v4::RaydiumAmmV4SwapEvent,
-            raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event},
-            raydium_cpmm::RaydiumCpmmSwapEvent,
+    streaming::{
+        common::SimdUtils,
+        event_parser::{
+            protocols::{
+                bonk::BonkTradeEvent,
+                pumpfun::PumpFunTradeEvent,
+                pumpswap::{PumpSwapBuyEvent, PumpSwapSellEvent},
+                raydium_amm_v4::RaydiumAmmV4SwapEvent,
+                raydium_clmm::{RaydiumClmmSwapEvent, RaydiumClmmSwapV2Event},
+                raydium_cpmm::RaydiumCpmmSwapEvent,
+            },
+            UnifiedEvent,
         },
-        UnifiedEvent,
     },
 };
 
@@ -293,8 +290,7 @@ pub struct SwapData {
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct EventMetadata {
-    pub id: String,
-    pub signature: String,
+    pub signature: Cow<'static, str>,
     pub slot: u64,
     pub transaction_index: Option<u64>, // 新增：交易在slot中的索引
     pub block_time: i64,
@@ -312,8 +308,7 @@ pub struct EventMetadata {
 impl EventMetadata {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        id: String,
-        signature: String,
+        signature: Cow<'static, str>,
         slot: u64,
         block_time: i64,
         block_time_ms: i64,
@@ -326,7 +321,6 @@ impl EventMetadata {
         transaction_index: Option<u64>,
     ) -> Self {
         Self {
-            id,
             signature,
             slot,
             block_time,
@@ -341,10 +335,6 @@ impl EventMetadata {
             instruction_inner_index,
             transaction_index,
         }
-    }
-
-    pub fn set_id(&mut self, id: String) {
-        self.id = format!("{}-{}-{}", self.signature, self.event_type, id);
     }
 
     pub fn set_swap_data(&mut self, swap_data: SwapData) {
@@ -463,6 +453,12 @@ pub fn parse_swap_data_from_next_instructions(
             break;
         }
         let data = &compiled.data;
+        
+        // 使用 SIMD 验证数据格式
+        if !SimdUtils::validate_data_format(data, 8) {
+            continue;
+        }
+        
         let get_pubkey = |i: usize| accounts[compiled.accounts[i] as usize];
         let (source, destination, amount) = match data[0] {
             12 if compiled.accounts.len() >= 4 => {
