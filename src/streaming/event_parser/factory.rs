@@ -1,9 +1,15 @@
 use anyhow::{anyhow, Result};
 use solana_sdk::pubkey::Pubkey;
-use std::{collections::HashMap, sync::{Arc, LazyLock}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use crate::streaming::event_parser::protocols::{
-    bonk::parser::BONK_PROGRAM_ID, pumpfun::parser::PUMPFUN_PROGRAM_ID, pumpswap::parser::PUMPSWAP_PROGRAM_ID, raydium_amm_v4::parser::RAYDIUM_AMM_V4_PROGRAM_ID, raydium_clmm::parser::RAYDIUM_CLMM_PROGRAM_ID, raydium_cpmm::parser::RAYDIUM_CPMM_PROGRAM_ID, BonkEventParser, RaydiumAmmV4EventParser, RaydiumClmmEventParser, RaydiumCpmmEventParser
+    bonk::parser::BONK_PROGRAM_ID, pumpfun::parser::PUMPFUN_PROGRAM_ID,
+    pumpswap::parser::PUMPSWAP_PROGRAM_ID, raydium_amm_v4::parser::RAYDIUM_AMM_V4_PROGRAM_ID,
+    raydium_clmm::parser::RAYDIUM_CLMM_PROGRAM_ID, raydium_cpmm::parser::RAYDIUM_CPMM_PROGRAM_ID,
+    BonkEventParser, RaydiumAmmV4EventParser, RaydiumClmmEventParser, RaydiumCpmmEventParser,
 };
 
 use super::{
@@ -76,12 +82,10 @@ static EVENT_PARSERS: LazyLock<HashMap<Protocol, Arc<dyn EventParser>>> = LazyLo
     parsers
 });
 
-
 /// 事件解析器工厂 - 用于创建不同协议的事件解析器
 pub struct EventParserFactory;
 
 impl EventParserFactory {
-
     /// 创建指定协议的事件解析器
     pub fn create_parser(protocol: Protocol) -> Arc<dyn EventParser> {
         EVENT_PARSERS.get(&protocol).cloned().unwrap_or_else(|| {
@@ -91,10 +95,7 @@ impl EventParserFactory {
 
     /// 创建所有协议的事件解析器
     pub fn create_all_parsers() -> Vec<Arc<dyn EventParser>> {
-        Self::supported_protocols()
-            .into_iter()
-            .map(Self::create_parser)
-            .collect()
+        Self::supported_protocols().into_iter().map(Self::create_parser).collect()
     }
 
     /// 获取所有支持的协议

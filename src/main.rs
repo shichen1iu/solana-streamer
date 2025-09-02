@@ -186,7 +186,12 @@ async fn test_shreds() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+//接收上游（EventProcessor）处理好的、结构化的事件，并执行你定义的具体业务逻辑
+//这个函数本身不处理事件，而是制造并返回另一个专门用于处理事件的函数。
+// Fn(Box<dyn UnifiedEvent>): 返回的这个闭包接收一个参数，参数类型是 Box<dyn UnifiedEvent>
+// UnifiedEvent 是一个 trait (接口)，所有不同类型的具体事件（如 PumpFunTradeEvent、RaydiumCpmmSwapEvent 等）都实现了这个接口。这使得我们可以用一个统一的类型来代表各种事件。
 fn create_event_callback() -> impl Fn(Box<dyn UnifiedEvent>) {
+    //这是被创建并返回的那个闭包。每当有一个新的事件需要处理时，EventProcessor 就会调用这个闭包，并把事件作为 event 参数传进来。
     |event: Box<dyn UnifiedEvent>| {
         println!(
             "🎉 Event received! Type: {:?}, transaction_index: {:?}",

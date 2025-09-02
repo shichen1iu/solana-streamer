@@ -61,8 +61,13 @@ impl YellowstoneGrpc {
         x_token: Option<String>,
         config: StreamClientConfig,
     ) -> AnyResult<Self> {
+        //初始化和配置安全连接（TLS）的加密库
+        //install_default(): 这行代码的作用就是告诉整个程序：“接下来所有需要 TLS 加密的安全连接，都请使用 ring 这个库来完成。” 它将 ring 设置为全局默认的加密服务提供者。
         let _ = rustls::crypto::ring::default_provider().install_default().ok();
-        let metrics = Arc::new(RwLock::new(PerformanceMetrics::new()));
+
+        //性能指标
+        let metrics: Arc<RwLock<PerformanceMetrics>> =
+            Arc::new(RwLock::new(PerformanceMetrics::new()));
 
         let subscription_manager =
             SubscriptionManager::new(endpoint.clone(), x_token.clone(), config.clone());
@@ -88,24 +93,23 @@ impl YellowstoneGrpc {
         })
     }
 
-    /// Creates a new YellowstoneGrpcClient with high-throughput configuration.
+    /// 创建具有高吞吐量配置的新 YellowstoneGrpcClient。
     ///
-    /// This is a convenience method that creates a client optimized for high-concurrency scenarios
-    /// where throughput is prioritized over latency. See `StreamClientConfig::high_throughput()`
-    /// for detailed configuration information.
+    /// 这是一个便捷方法，用于创建为高并发场景优化的客户端，
+    /// 在这种场景中，吞吐量优先于延迟。有关详细的配置信息，
+    /// 请参阅 `StreamClientConfig::high_throughput()`。
     pub fn new_high_throughput(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
         Self::new_with_config(endpoint, x_token, StreamClientConfig::high_throughput())
     }
 
-    /// Creates a new YellowstoneGrpcClient with low-latency configuration.
+    /// 创建具有低延迟配置的新 YellowstoneGrpcClient。
     ///
-    /// This is a convenience method that creates a client optimized for real-time scenarios
-    /// where latency is prioritized over throughput. See `StreamClientConfig::low_latency()`
-    /// for detailed configuration information.
+    /// 这是一个便捷方法，用于创建为实时场景优化的客户端，
+    /// 在这种场景中，延迟优先于吞吐量。有关详细的配置信息，
+    /// 请参阅 `StreamClientConfig::low_latency()`。
     pub fn new_low_latency(endpoint: String, x_token: Option<String>) -> AnyResult<Self> {
         Self::new_with_config(endpoint, x_token, StreamClientConfig::low_latency())
     }
-
 
     /// 获取配置
     pub fn get_config(&self) -> &StreamClientConfig {
@@ -143,19 +147,19 @@ impl YellowstoneGrpc {
         self.active_subscription.store(false, Ordering::Release);
     }
 
-    /// Simplified immediate event subscription (recommended for simple scenarios)
+    /// 简化的即时事件订阅（推荐用于简单场景）
     ///
-    /// # Parameters
-    /// * `protocols` - List of protocols to monitor
-    /// * `bot_wallet` - Optional bot wallet address for filtering related transactions
-    /// * `transaction_filter` - Transaction filter specifying accounts to include/exclude
-    /// * `account_filter` - Account filter specifying accounts and owners to monitor
-    /// * `event_filter` - Optional event filter for further event filtering, no filtering if None
-    /// * `commitment` - Optional commitment level, defaults to Confirmed
-    /// * `callback` - Event callback function that receives parsed unified events
+    /// # 参数
+    /// * `protocols` - 要监控的协议列表
+    /// * `bot_wallet` - 可选的机器人钱包地址，用于过滤相关交易
+    /// * `transaction_filter` - 交易过滤器，指定要包含/排除的账户
+    /// * `account_filter` - 账户过滤器，指定要监控的账户和所有者
+    /// * `event_filter` - 可选的事件过滤器，用于进一步的事件过滤，如果为 None 则不进行过滤
+    /// * `commitment` - 可选的提交级别，默认为 Confirmed
+    /// * `callback` - 事件回调函数，接收已解析的统一事件
     ///
-    /// # Returns
-    /// Returns `AnyResult<()>`, `Ok(())` on success, error information on failure
+    /// # 返回
+    /// 成功时返回 `AnyResult<()>`，即 `Ok(())`，失败时返回错误信息
     pub async fn subscribe_events_immediate<F>(
         &self,
         protocols: Vec<Protocol>,
@@ -169,6 +173,10 @@ impl YellowstoneGrpc {
     where
         F: Fn(Box<dyn UnifiedEvent>) + Send + Sync + 'static,
     {
+        //current: false: 这是我们期望 active_subscription 当前的值。我们希望只有在当前没有订阅（即值为 false）时，这个操作才能成功。
+        //new: true: 如果当前值确实是我们期望的 false，那么就把它原子地更新为 true。
+        //success: Ordering::Acquire: 这是内存排序（Memory Ordering）参数。Acquire 保证了在这个操作之后的所有内存读写操作，都不能被重排到这个操作之前。简单来说，它建立了一个内存屏障，确保当我们成功将标志位设为 true 后，后续启动订阅流的代码能够看到一个完全一致的内存状态。
+        //failure: Ordering::Relaxed: 如果操作失败（即当前值不是 false），Relaxed 意味着没有特殊的内存排序要求，这是最快的排序方式，因为我们只关心操作失败的结果，不关心失败时的内存状态。
         if self
             .active_subscription
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -313,14 +321,14 @@ impl YellowstoneGrpc {
         Ok(())
     }
 
-    /// Update subscription filters at runtime without reconnection
+    /// 在运行时更新订阅过滤器，无需重新连接
     ///
-    /// # Parameters
-    /// * `transaction_filter` - New transaction filter to apply
-    /// * `account_filter` - New account filter to apply
+    /// # 参数
+    /// * `transaction_filter` - 要应用的新交易过滤器
+    /// * `account_filter` - 要应用的新账户过滤器
     ///
-    /// # Returns
-    /// Returns `AnyResult<()>` on success, error on failure
+    /// # 返回
+    /// 成功时返回 `AnyResult<()>`，失败时返回错误
     pub async fn update_subscription(
         &self,
         transaction_filter: TransactionFilter,

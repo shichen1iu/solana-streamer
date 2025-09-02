@@ -139,7 +139,7 @@ impl AtomicProcessingTimeStats {
         // Update minimum value, check time difference and reset if over 10 seconds
         let mut current_min = self.min_time_bits.load(Ordering::Relaxed);
         let min_timestamp = self.min_time_timestamp_nanos.load(Ordering::Relaxed);
-        
+
         // Check if min value timestamp exceeds 10 seconds (10_000_000_000 nanoseconds)
         let min_time_diff_nanos = now_nanos.saturating_sub(min_timestamp);
         if min_time_diff_nanos > 10_000_000_000 {
@@ -148,7 +148,7 @@ impl AtomicProcessingTimeStats {
             self.min_time_timestamp_nanos.store(now_nanos, Ordering::Relaxed);
             current_min = f64::INFINITY.to_bits();
         }
-        
+
         // If current time is less than min value, update min value and timestamp
         while time_bits < current_min {
             match self.min_time_bits.compare_exchange_weak(
@@ -232,21 +232,41 @@ pub struct ProcessingTimeStats {
 }
 
 /// Event metrics snapshot
+/// 事件指标快照
 #[derive(Debug, Clone)]
 pub struct EventMetricsSnapshot {
+    /// Total number of processing cycles triggered
+    /// 处理循环被触发的总次数
     pub process_count: u64,
+    /// Total number of events processed
+    /// 已处理的事件总数
     pub events_processed: u64,
+    /// Events processed per second
+    /// 每秒处理的事件数
     pub events_per_second: f64,
 }
 
 /// Compatibility structure - complete performance metrics
+/// 兼容性结构体 - 完整的性能指标
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
+    /// Uptime since the start of monitoring
+    /// 从监控开始的正常运行时间
     pub uptime: std::time::Duration,
+    /// Transaction event metrics
+    /// 交易事件相关的指标
     pub tx_metrics: EventMetricsSnapshot,
+    /// Account update event metrics
+    /// 账户更新事件相关的指标
     pub account_metrics: EventMetricsSnapshot,
+    /// Block metadata event metrics
+    /// 区块元数据事件相关的指标
     pub block_meta_metrics: EventMetricsSnapshot,
+    /// Statistics on event processing time
+    /// 事件处理时间的统计数据
     pub processing_stats: ProcessingTimeStats,
+    /// Number of events dropped due to backpressure
+    /// 因背压而被丢弃的事件数量
     pub dropped_events_count: u64,
 }
 
